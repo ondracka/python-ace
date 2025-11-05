@@ -59,6 +59,7 @@ EWEIGHTS_COL = "w_energy"
 FORCES_COL = "forces"
 FORCES_PRED_COL = "forces_pred"
 FWEIGHTS_COL = "w_forces"
+DATASET_ID_COL = "ids"
 
 PBC = "pbc"
 ENERGY = "energy"

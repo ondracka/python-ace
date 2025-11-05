@@ -131,6 +131,13 @@ class PyACEFit:
         self.bbasis_opt = None
         self.cbasis_opt = None
 
+        self.dataset_id_to_index = {}
+        self.dataset_ids = []
+        self.dataset_offset_params = np.array([], dtype=float)
+        self._basis_param_count = 0
+        self._dataset_offset_logged = False
+        self._loss_offset_logged = False
+
         self.data_executor = None
         self.executors_kw_args = executors_kw_args or {}
 
@@ -156,7 +163,8 @@ class PyACEFit:
 
     def _init_trainable_params(self):
         self.trainable_params_mask = compute_bbasisset_train_mask(self.bbasis, self.trainable_parameters_dict)
-        self.trainable_params = np.array(self.bbasis.all_coeffs)[self.trainable_params_mask]
+        self._basis_param_count = int(np.sum(self.trainable_params_mask))
+        self._refresh_trainable_params()
 
     @property
     def structures_dataframe(self):
@@ -170,10 +178,98 @@ class PyACEFit:
 
     @structures_dataframe.setter
     def structures_dataframe(self, value):
+        log.info("structures_dataframe.setter: received value type=%s len=%s", type(value),
+                 len(value) if value is not None else None)
         self._structures_dataframe = value  # .copy()
         # self.preprocess_dataframe(self._structures_dataframe)
+        log.info("structures_dataframe.setter: calling _update_dataset_offset_info()")
+        self._update_dataset_offset_info()
+        log.info("structures_dataframe.setter: completed")
+
+    def _refresh_trainable_params(self):
+        log.info("_refresh_trainable_params: start")
+        if self.bbasis is not None and self.trainable_params_mask is not None:
+            basis_params = np.array(self.bbasis.all_coeffs)[self.trainable_params_mask]
+        else:
+            basis_params = np.array([], dtype=float)
+        dataset_params = self.dataset_offset_params if self.dataset_offset_params is not None else np.array([], dtype=float)
+        self.trainable_params = np.concatenate((basis_params, dataset_params))
+        log.info("_refresh_trainable_params: basis_len=%d dataset_len=%d total_len=%d",
+                 len(basis_params), len(dataset_params), len(self.trainable_params))
+
+    def _update_dataset_offset_info(self):
+        log.info("_update_dataset_offset_info: start")
+        df = self._structures_dataframe
+        if df is None or DATASET_ID_COL not in df.columns:
+            log.info("_update_dataset_offset_info: dataframe None or missing `%s` column", DATASET_ID_COL)
+            self.dataset_id_to_index = {}
+            self.dataset_ids = []
+            self.dataset_offset_params = np.array([], dtype=float)
+            self._refresh_trainable_params()
+            log.info("_update_dataset_offset_info early exit")
+            return
+
+        dataset_ids = list(pd.unique(df[DATASET_ID_COL]))
+        log.info("_update_dataset_offset_info: dataset_ids=%s", dataset_ids)
+        previous_offsets = {ds_id: self.dataset_offset_params[idx]
+                            for ds_id, idx in self.dataset_id_to_index.items()
+                            if idx < len(self.dataset_offset_params)}
+        log.info("_update_dataset_offset_info: previous_offsets=%s", previous_offsets)
+
+        energy_pa_series = None
+        if E_CORRECTED_PER_ATOM_COLUMN in df.columns:
+            energy_pa_series = df[E_CORRECTED_PER_ATOM_COLUMN]
+        elif ENERGY_CORRECTED_COL in df.columns:
+            if NUMBER_OF_ATOMS in df.columns:
+                energy_pa_series = df[ENERGY_CORRECTED_COL] / df[NUMBER_OF_ATOMS]
+            elif ASE_ATOMS in df.columns:
+                energy_pa_series = df[ENERGY_CORRECTED_COL] / df[ASE_ATOMS].map(len)
+
+        mean_map = {}
+        if energy_pa_series is not None:
+            for ds_id in dataset_ids:
+                mask = df[DATASET_ID_COL] == ds_id
+                if np.any(mask):
+                    mean_map[ds_id] = float(energy_pa_series[mask].mean())
+        log.info("_update_dataset_offset_info: mean_map=%s", mean_map)
+
+        if mean_map:
+            base_id = min(mean_map, key=lambda k: abs(mean_map[k]))
+            base_mean = mean_map[base_id]
+        else:
+            base_id = dataset_ids[0] if dataset_ids else None
+            base_mean = mean_map.get(base_id, 0.0) if base_id is not None else 0.0
+        log.info("_update_dataset_offset_info: base_id=%s base_mean=%s", base_id, base_mean)
+
+        new_offsets = np.zeros(len(dataset_ids), dtype=float)
+        for idx, ds_id in enumerate(dataset_ids):
+            if ds_id in previous_offsets:
+                new_offsets[idx] = previous_offsets[ds_id]
+            else:
+                new_offsets[idx] = base_mean - mean_map.get(ds_id, 0.0)
+
+        self.dataset_id_to_index = {ds_id: idx for idx, ds_id in enumerate(dataset_ids)}
+        self.dataset_ids = dataset_ids
+        self.dataset_offset_params = new_offsets
+        log.info("Dataset offset setup: ids=%s, previous=%s, mean_map=%s, base_id=%s, base_mean=%s, offsets=%s",
+                 dataset_ids, previous_offsets, mean_map, base_id, base_mean, new_offsets.tolist())
+        if len(dataset_ids) > 1:
+            offset_map = {ds_id: self.dataset_offset_params[idx] for idx, ds_id in enumerate(dataset_ids)}
+            if mean_map:
+                log.info("Detected multiple datasets with ids=%s (base id=%s)", dataset_ids, base_id)
+                log.info("Per-atom energy means by dataset: %s", mean_map)
+            else:
+                log.info("Detected multiple datasets with ids=%s (base id=%s)", dataset_ids, base_id)
+            log.info("Initial per-atom dataset offsets: %s", offset_map)
+        self._dataset_offset_logged = False
+        self._loss_offset_logged = False
+        self._refresh_trainable_params()
+        log.info("_update_dataset_offset_info: finished offsets now %s", self.dataset_offset_params.tolist())
 
     def preprocess_dataframe(self, structures_dataframe):
+        log.info("preprocess_dataframe: start len=%s columns=%s",
+                 len(structures_dataframe) if structures_dataframe is not None else None,
+                 list(structures_dataframe.columns) if structures_dataframe is not None else None)
         # TODO: energies and forces weights are generated here, if columns not provided
         for col in required_structures_dataframe_columns:
             if col not in structures_dataframe.columns:
@@ -185,15 +281,56 @@ class PyACEFit:
             structures_dataframe[FWEIGHTS_COL] = structures_dataframe[FWEIGHTS_COL].map(np.array)
 
         # normalize_energy_forces_weights(structures_dataframe)
+        log.info("preprocess_dataframe: completed")
+
+    def _get_dataset_energy_shifts(self, dataframe):
+        log.info("_get_dataset_energy_shifts: start len=%s", len(dataframe))
+        if not len(self.dataset_offset_params) or DATASET_ID_COL not in dataframe.columns:
+            log.info("_get_dataset_energy_shifts: no dataset offsets or missing %s column", DATASET_ID_COL)
+            return np.zeros(len(dataframe))
+        if NUMBER_OF_ATOMS in dataframe.columns:
+            natoms = dataframe[NUMBER_OF_ATOMS].to_numpy()
+        elif ASE_ATOMS in dataframe.columns:
+            natoms = dataframe[ASE_ATOMS].map(len).to_numpy()
+        else:
+            raise ValueError(
+                f"Either `{NUMBER_OF_ATOMS}` or `{ASE_ATOMS}` column is required to apply dataset energy offsets")
+        dataset_ids = dataframe[DATASET_ID_COL].to_numpy()
+        shifts = np.zeros(len(dataframe))
+        for idx, ds_id in enumerate(dataset_ids):
+            offset_idx = self.dataset_id_to_index.get(ds_id)
+            if offset_idx is not None and offset_idx < len(self.dataset_offset_params):
+                shifts[idx] = self.dataset_offset_params[offset_idx] * natoms[idx]
+        if len(self.dataset_offset_params) and not self._dataset_offset_logged:
+            per_atom_offsets = {ds_id: self.dataset_offset_params[self.dataset_id_to_index[ds_id]]
+                                for ds_id in self.dataset_ids}
+            log.info("Applying dataset per-atom offsets at prediction: %s", per_atom_offsets)
+            self._dataset_offset_logged = True
+        log.info("_get_dataset_energy_shifts: returning shifts=%s", shifts.tolist())
+        return shifts
+
+    def get_dataset_offsets(self):
+        """Return dictionary mapping dataset ids to per-atom energy offsets."""
+        return {ds_id: self.dataset_offset_params[idx]
+                for idx, ds_id in enumerate(self.dataset_ids)}
 
     def update_bbasis(self, params):
-        assert sum(self.trainable_params_mask) == len(params), \
-            "update_bbasis::trainable parameters mask({}) is inconsistent with params({})" \
-                .format(sum(self.trainable_params_mask), len(params))
+        params = np.asarray(params, dtype=float)
+        basis_param_count = self._basis_param_count
+        if params.ndim != 1:
+            params = params.flatten()
+        if len(params) < basis_param_count:
+            raise ValueError(
+                "update_bbasis::number of provided parameters ({}) is less than required basis params ({})"
+                .format(len(params), basis_param_count))
 
+        basis_params = params[:basis_param_count]
+        dataset_params = params[basis_param_count:]
         np_array = np.array(self.bbasis.all_coeffs)
-        np_array[self.trainable_params_mask] = params
+        np_array[self.trainable_params_mask] = basis_params
         self.bbasis.all_coeffs = np_array
+        self.dataset_offset_params = np.array(dataset_params, dtype=float)
+        self._refresh_trainable_params()
         return self.bbasis
 
     def get_cbasis(self, params):
@@ -206,6 +343,10 @@ class PyACEFit:
             params = self.trainable_params
 
         self.eval_count += 1
+        log.info("loss: start eval=%s params_len=%s", self.eval_count, len(params))
+        if not getattr(self, "_loss_offset_logged", False) and len(self.dataset_offset_params):
+            log.info("Current dataset offsets before loss evaluation: %s", self.get_dataset_offsets())
+            self._loss_offset_logged = True
         t0 = time.time()
         energy_forces_pred_df = self.predict_energy_forces(params, keep_parallel_dataexecutor=True)
 
@@ -315,6 +456,10 @@ class PyACEFit:
         energy_forces_pred_df = pd.DataFrame({ENERGY_PRED_COL: energy_forces_pred.map(lambda d: d[0]),
                                               FORCES_PRED_COL: energy_forces_pred.map(lambda d: np.array(d[1]))},
                                              index=energy_forces_pred.index)
+        if len(energy_forces_pred_df) and len(self.dataset_offset_params):
+            df = self.structures_dataframe.loc[energy_forces_pred_df.index]
+            energy_shifts = self._get_dataset_energy_shifts(df)
+            energy_forces_pred_df[ENERGY_PRED_COL] = energy_forces_pred_df[ENERGY_PRED_COL].to_numpy() + energy_shifts
 
         return energy_forces_pred_df
 

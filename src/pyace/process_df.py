@@ -162,6 +162,7 @@ def compute_formation_energy(df: pd.DataFrame, elements=None, epa_gs_dict=None,
     if epa_gs_dict is None:
         epa_gs_dict = {}
         for el in elements:
+            #Modify the design-matrix assembly to add one-hot columns for those ids and expand the coefficient vector/masks accordingly.
             subdf = df[df["c_" + el] == 1.0]
             if len(subdf) > 0:
                 e_min_pa = subdf[energy_per_atom_column].min()

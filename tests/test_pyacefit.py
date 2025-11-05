@@ -9,7 +9,7 @@ from pyace.preparedata import generate_atomic_env_column, get_reference_dataset
 
 from ase.build import bulk
 
-from pyace.const import PYACE_EVAL
+from pyace.const import PYACE_EVAL, DATASET_ID_COL, ENERGY_CORRECTED_COL, NUMBER_OF_ATOMS
 
 TESTS_DF_PCKL = "tests/representative_df.pckl.gzip"
 COMPRESSION = "gzip"
@@ -165,6 +165,48 @@ def test_fit_process2():
     assert np.allclose(fit.best_params, [1.01153846, 1.01153846, 1.01153846, 1.01153846, 1.01153846,
                                          1.01153846, 1.01153846, 1.01153846, 0.9, 1.01153846,
                                          0.01011538, 0.01011538, 0.01011538])
+
+
+def test_dataset_specific_offsets_reduce_loss():
+    base_df = get_reference_dataset(PYACE_EVAL, TESTS_DF_PCKL)
+    df_ref = base_df.copy(deep=True)
+    df_ref[DATASET_ID_COL] = "ref"
+    df_shifted = base_df.copy(deep=True)
+    df_shifted[DATASET_ID_COL] = "shifted"
+    shift_per_atom = 0.5
+    df_shifted[ENERGY_CORRECTED_COL] = df_shifted[ENERGY_CORRECTED_COL] + shift_per_atom * df_shifted[NUMBER_OF_ATOMS]
+
+    combined = pd.concat([df_ref, df_shifted], ignore_index=True)
+    combined["fweights"] = combined[NUMBER_OF_ATOMS].map(lambda n: np.ones(n))
+    combined["eweights"] = combined[NUMBER_OF_ATOMS].map(lambda n: np.array([1.]).reshape(-1,))
+    combined['w_forces'] = combined["fweights"].copy()
+    combined['w_energy'] = combined["eweights"].copy()
+
+    bBasisConfiguration = prepare_test_basis_configuration()
+    fit = PyACEFit(bBasisConfiguration,
+                   loss_spec=LossFunctionSpecification(kappa=0.1),
+                   executors_kw_args=dict(parallel_mode="serial"))
+
+    fit.preprocess_dataframe(combined)
+    fit.structures_dataframe = combined
+
+    basis_param_count = int(np.sum(fit.trainable_params_mask))
+    offsets = fit.get_dataset_offsets()
+    assert offsets["ref"] == pytest.approx(0.0, abs=1e-3)
+    assert offsets["shifted"] == pytest.approx(shift_per_atom, abs=1e-3)
+
+    initial_params = fit.trainable_params.copy()
+    loss_with_offset = fit.loss(initial_params, verbose=False)
+
+    params_no_offset = initial_params.copy()
+    shifted_index = fit.dataset_id_to_index["shifted"]
+    params_no_offset[basis_param_count + shifted_index] = offsets["ref"]
+    loss_no_offset = fit.loss(params_no_offset, verbose=False)
+
+    assert loss_with_offset < loss_no_offset
+
+    if fit.data_executor is not None:
+        fit.data_executor.stop_executor()
 
 
 def test_fit_value_error_nrad():

@@ -799,27 +799,43 @@ class ACEDataset:
             E_CORRECTED_PER_ATOM_COLUMN].isna().any(), f"{E_CORRECTED_PER_ATOM_COLUMN} column contains NaN"
         assert not df[FORCES_COL].map(lambda f: np.any(np.isnan(f))).any(), f"{FORCES_COL} column contains NaN"
 
-        epa_min = df[E_CORRECTED_PER_ATOM_COLUMN].min()
-        epa_max = df[E_CORRECTED_PER_ATOM_COLUMN].max()
+        def log_energy_stats(epa_series, prefix=""):
+            epa_min_loc = epa_series.min()
+            epa_max_loc = epa_series.max()
+            epa_abs_min_loc = epa_series.abs().min()
+            epa_abs_max_loc = epa_series.abs().max()
+            log.info(f"{prefix}Min/max energy per atom: [{epa_min_loc:.3f}, {epa_max_loc:.3f}] eV/atom")
+            log.info(f"{prefix}Min/max abs energy per atom: [{epa_abs_min_loc:.3f}, {epa_abs_max_loc:.3f}] eV/atom")
 
-        epa_abs_min = df[E_CORRECTED_PER_ATOM_COLUMN].abs().min()
-        epa_abs_max = df[E_CORRECTED_PER_ATOM_COLUMN].abs().max()
+        epa_series = df[E_CORRECTED_PER_ATOM_COLUMN]
+        epa_min = epa_series.min()
+        epa_max = epa_series.max()
+        epa_abs_min = epa_series.abs().min()
+        epa_abs_max = epa_series.abs().max()
 
-        log.info(f"Min/max energy per atom: [{epa_min:.3f}, {epa_max:.3f}] eV/atom")
-        log.info(f"Min/max abs energy per atom: [{epa_abs_min:.3f}, {epa_abs_max:.3f}] eV/atom")
+        log_energy_stats(epa_series)
+
+        if DATASET_ID_COL in df.columns:
+            for ds_id, group in df.groupby(DATASET_ID_COL):
+                log_energy_stats(group[E_CORRECTED_PER_ATOM_COLUMN], prefix=f"[ids={ds_id}] ")
 
         # check energy and forces range!
         if epa_min < -20 or epa_max > 250:
-            # re-run with self.reference_energy='auto'
-            if self.reference_energy is None:
+            if DATASET_ID_COL in df.columns:
                 big_warning(f"Some values of corrected energy (min={epa_min:.3g} eV/atom, max={epa_max:.3g} eV/atom) are too extreme,\n" +
                             "i.e. <-20 eV/atom or >250 eV/atom\n" +
-                            "`reference_energy` will be computed automatically.")
-                self.reference_energy = 'auto'
-                return self.process_dataset(df)
-            big_warning(f"Some values of corrected energy (min={epa_min:.3g} eV/atom, max={epa_max:.3g} eV/atom) are too extreme,\n" +
-                        "i.e. <-20 eV/atom or >250 eV/atom\n" +
-                        "Correct your energy or use data::reference_energy: auto option !!!")
+                            "Dataset-specific offsets will be fitted; consider validating reference energies.")
+            else:
+                # re-run with self.reference_energy='auto'
+                if self.reference_energy is None:
+                    big_warning(f"Some values of corrected energy (min={epa_min:.3g} eV/atom, max={epa_max:.3g} eV/atom) are too extreme,\n" +
+                                "i.e. <-20 eV/atom or >250 eV/atom\n" +
+                                "`reference_energy` will be computed automatically.")
+                    self.reference_energy = 'auto'
+                    return self.process_dataset(df)
+                big_warning(f"Some values of corrected energy (min={epa_min:.3g} eV/atom, max={epa_max:.3g} eV/atom) are too extreme,\n" +
+                            "i.e. <-20 eV/atom or >250 eV/atom\n" +
+                            "Correct your energy or use data::reference_energy: auto option !!!")
         # enforce attach single point calculator to avoid mistakes
         df[ASE_ATOMS] = df.apply(attach_single_point_calculator, axis=1)
         log.info("Attaching SinglePointCalculator to ASE atoms...done")

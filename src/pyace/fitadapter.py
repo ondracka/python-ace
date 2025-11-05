@@ -54,10 +54,102 @@ class FitBackendAdapter:
         self.metrics = None
         self.fit_metrics_callback = fit_metrics_callback
         self.test_metrics_callback = test_metrics_callback
+        self.tensorpot_dataset_offsets = None
 
     @property
     def evaluator_name(self):
         return self.backend_config.evaluator_name
+
+    def _compute_dataset_offsets(self, dataframe: pd.DataFrame):
+        """Return per-dataset energy-per-atom offsets relative to the dataset whose mean energy is closest to zero.
+
+        Offsets are computed as (mean_energy_dataset - mean_energy_base) so that adding the offset (per atom)
+        to the base prediction recovers the dataset energy."""
+        if dataframe is None or DATASET_ID_COL not in dataframe.columns:
+            return None, None, None
+
+        if NUMBER_OF_ATOMS in dataframe.columns:
+            natoms = dataframe[NUMBER_OF_ATOMS].to_numpy()
+        elif ASE_ATOMS in dataframe.columns:
+            natoms = dataframe[ASE_ATOMS].map(len).to_numpy()
+            dataframe = dataframe.copy()
+            dataframe[NUMBER_OF_ATOMS] = natoms
+        else:
+            raise ValueError(
+                f"TensorFlow backend requires `{NUMBER_OF_ATOMS}` or `{ASE_ATOMS}` column when dataset ids are used")
+
+        energy_per_atom = dataframe[ENERGY_CORRECTED_COL].to_numpy() / dataframe[NUMBER_OF_ATOMS].to_numpy()
+        dataset_ids = dataframe[DATASET_ID_COL].to_numpy()
+
+        mean_map = {}
+        for ds_id in np.unique(dataset_ids):
+            mask = dataset_ids == ds_id
+            if np.any(mask):
+                mean_map[ds_id] = float(energy_per_atom[mask].mean())
+
+        if not mean_map:
+            return None, None, None
+
+        base_id = min(mean_map, key=lambda k: abs(mean_map[k]))
+        base_mean = mean_map[base_id]
+        offsets = {ds_id: mean_map[ds_id] - base_mean for ds_id in mean_map}
+        offsets[base_id] = 0.0
+        return offsets, base_id, mean_map
+
+    def _apply_dataset_offsets(self, dataframe: pd.DataFrame, offsets: Dict, inverse: bool = False) -> pd.DataFrame:
+        if not offsets or dataframe is None or DATASET_ID_COL not in dataframe.columns:
+            return dataframe
+
+        df = dataframe.copy()
+        if NUMBER_OF_ATOMS in df.columns:
+            natoms = df[NUMBER_OF_ATOMS].to_numpy()
+        elif ASE_ATOMS in df.columns:
+            natoms = df[ASE_ATOMS].map(len).to_numpy()
+        else:
+            raise ValueError(
+                f"TensorFlow backend requires `{NUMBER_OF_ATOMS}` or `{ASE_ATOMS}` column when dataset ids are used")
+
+        mapped_offsets = df[DATASET_ID_COL].map(lambda ds: offsets.get(ds, 0.0)).to_numpy()
+        sign = -1 if inverse else 1
+        delta = sign * mapped_offsets * natoms
+        df[ENERGY_CORRECTED_COL] = df[ENERGY_CORRECTED_COL].to_numpy() + delta
+        if E_CORRECTED_PER_ATOM_COLUMN in df.columns:
+            df[E_CORRECTED_PER_ATOM_COLUMN] = df[ENERGY_CORRECTED_COL] / natoms
+        if ENERGY in df.columns:
+            df[ENERGY] = df[ENERGY].to_numpy() + delta
+        if 'energy_per_atom' in df.columns:
+            df['energy_per_atom'] = df[ENERGY_CORRECTED_COL] / natoms
+        log.info("TensorFlow backend: %s offsets applied (%s) -> delta/atom range [%.3f, %.3f] eV",
+                 "removing" if inverse else "adding",
+                 "per atom" if not inverse else "re-centering",
+                 float(np.min(mapped_offsets)), float(np.max(mapped_offsets)))
+        return df
+
+    def _log_energy_stats(self, dataframe: pd.DataFrame, label: str):
+        if dataframe is None or ENERGY_CORRECTED_COL not in dataframe.columns:
+            log.info("%s: dataframe missing `%s` column", label, ENERGY_CORRECTED_COL)
+            return
+        log.info("%s: columns=%s", label, list(dataframe.columns))
+        if NUMBER_OF_ATOMS in dataframe.columns:
+            natoms = dataframe[NUMBER_OF_ATOMS].to_numpy()
+        elif ASE_ATOMS in dataframe.columns:
+            natoms = dataframe[ASE_ATOMS].map(len).to_numpy()
+        else:
+            log.info("%s: unable to compute per-atom stats (missing `%s`/`%s`)", label, NUMBER_OF_ATOMS, ASE_ATOMS)
+            return
+        epa = dataframe[ENERGY_CORRECTED_COL].to_numpy() / natoms
+        log.info("%s: energy/atom min=%.3f max=%.3f mean=%.3f std=%.3f", label, float(np.min(epa)),
+                 float(np.max(epa)), float(np.mean(epa)), float(np.std(epa)))
+        if DATASET_ID_COL in dataframe.columns:
+            for ds_id, grp in dataframe.groupby(DATASET_ID_COL):
+                if NUMBER_OF_ATOMS in grp.columns:
+                    nat = grp[NUMBER_OF_ATOMS].to_numpy()
+                else:
+                    nat = grp[ASE_ATOMS].map(len).to_numpy()
+                epa_ds = grp[ENERGY_CORRECTED_COL].to_numpy() / nat
+                log.info("%s [ids=%s]: energy/atom min=%.3f max=%.3f mean=%.3f std=%.3f count=%d",
+                         label, ds_id, float(np.min(epa_ds)), float(np.max(epa_ds)),
+                         float(np.mean(epa_ds)), float(np.std(epa_ds)), len(epa_ds))
 
     def fit(self,
             bbasisconfig: BBasisConfiguration,
@@ -90,12 +182,33 @@ class FitBackendAdapter:
 
         if self.backend_config.evaluator_name == TENSORPOT_EVAL:
             from tensorflow.python.framework.errors_impl import ResourceExhaustedError, InternalError
+
+            train_df_backend = dataframe
+            test_df_backend = test_dataframe
+            self.tensorpot_dataset_offsets = None
+            if DATASET_ID_COL in dataframe.columns:
+                self._log_energy_stats(dataframe, "TensorFlow backend: original train data")
+                offsets, base_id, mean_map = self._compute_dataset_offsets(dataframe)
+                if offsets:
+                    log.info("TensorFlow backend: dataset offsets found base_id=%s mean_map=%s offsets=%s",
+                             base_id, mean_map, offsets)
+                    train_df_backend = self._apply_dataset_offsets(dataframe, offsets, inverse=True)
+                    self._log_energy_stats(train_df_backend, "TensorFlow backend: adjusted train data")
+                    if test_dataframe is not None:
+                        test_df_backend = self._apply_dataset_offsets(test_dataframe, offsets, inverse=True)
+                        self._log_energy_stats(test_df_backend, "TensorFlow backend: adjusted test data")
+                    self.tensorpot_dataset_offsets = offsets
+                else:
+                    log.info("TensorFlow backend: unable to compute dataset offsets (mean_map empty)")
+            else:
+                self._log_energy_stats(dataframe, "TensorFlow backend: train data (no ids)")
+
             while True:
                 try:
-                    self.setup_tensorpot(bbasisconfig, dataframe, loss_spec, trainable_parameters_dict)
-                    fit_res = self.run_tensorpot_fit(bbasisconfig, dataframe, loss_spec, fit_config,
+                    self.setup_tensorpot(bbasisconfig, train_df_backend, loss_spec, trainable_parameters_dict)
+                    fit_res = self.run_tensorpot_fit(bbasisconfig, train_df_backend, loss_spec, fit_config,
                                                      trainable_parameters_dict,
-                                                     test_dataframe=test_dataframe)
+                                                     test_dataframe=test_df_backend)
                     self.log_optimization_result()
                     return fit_res
                 except (ResourceExhaustedError, InternalError) as e:
@@ -231,9 +344,17 @@ class FitBackendAdapter:
                 jacobian_factor = None  # default value - train all
             else:
                 jacobian_factor = jacobian_factor.astype(float)
+
+            train_df = dataframe
+            test_df_local = test_dataframe
+            if DATASET_ID_COL in train_df.columns:
+                self._log_energy_stats(train_df, "TensorFlow backend: train data passed to fitter")
+            else:
+                self._log_energy_stats(train_df, "TensorFlow backend: train data passed to fitter (no ids)")
+
             batch_size = self.backend_config.get(BACKEND_BATCH_SIZE_KW, 10)
             fit_options = fit_config.get(FIT_OPTIONS_KW, None)
-            self.fitter.fit(dataframe, test_df=test_dataframe, niter=fit_config[FIT_NITER_KW],
+            self.fitter.fit(train_df, test_df=test_df_local, niter=fit_config[FIT_NITER_KW],
                             optimizer=fit_config[FIT_OPTIMIZER_KW],
                             batch_size=batch_size, jacobian_factor=jacobian_factor,
                             callback=adapted_callback,  # call adapted_callback to pass current_bbasisconfig
@@ -318,7 +439,37 @@ class FitBackendAdapter:
     def predict(self, structures_dataframe=None, bbasisconfig=None):
         if self.fitter is None:
             self.setup_backend_for_predict(bbasisconfig)
-        return self.fitter.predict(structures_dataframe)
+        prediction = self.fitter.predict(structures_dataframe)
+        if self.backend_config.evaluator_name == TENSORPOT_EVAL and self.tensorpot_dataset_offsets:
+            if structures_dataframe is not None:
+                source_df = structures_dataframe
+            else:
+                try:
+                    source_df = self.fitter.get_fitting_data()
+                except AttributeError:
+                    source_df = None
+            if source_df is not None and DATASET_ID_COL in source_df.columns:
+                self._log_energy_stats(source_df, "TensorFlow backend: metrics dataframe before restoration")
+                if NUMBER_OF_ATOMS in source_df.columns:
+                    natoms = source_df[NUMBER_OF_ATOMS].to_numpy()
+                elif ASE_ATOMS in source_df.columns:
+                    natoms = source_df[ASE_ATOMS].map(len).to_numpy()
+                else:
+                    natoms = None
+                if natoms is not None and ENERGY_PRED_COL in prediction.columns:
+                    per_atom_offsets = source_df[DATASET_ID_COL].map(lambda ds: self.tensorpot_dataset_offsets.get(ds, 0.0)).to_numpy()
+                    prediction[ENERGY_PRED_COL] = prediction[ENERGY_PRED_COL].to_numpy() + per_atom_offsets * natoms
+                    if 'energy_pred_per_atom' in prediction.columns:
+                        prediction['energy_pred_per_atom'] = prediction['energy_pred_per_atom'].to_numpy() + per_atom_offsets
+                if ENERGY_PRED_COL in prediction.columns:
+                    pred_df = pd.DataFrame({
+                        ENERGY_CORRECTED_COL: prediction[ENERGY_PRED_COL].to_numpy(),
+                        DATASET_ID_COL: source_df[DATASET_ID_COL].to_numpy(),
+                        NUMBER_OF_ATOMS: natoms
+                    })
+                    self._log_energy_stats(pred_df,
+                                           "TensorFlow backend: energy predictions after restoration")
+        return prediction
 
     def compute_metrics(self, energy_col='energy_corrected',
                         nat_column='NUMBER_OF_ATOMS', force_col='forces'):
@@ -327,12 +478,41 @@ class FitBackendAdapter:
         l1, l2, smth1, smth2, smth3 = self.fitter.get_reg_components()
         datadf = self.fitter.get_fitting_data()
 
+        if self.backend_config.evaluator_name == TENSORPOT_EVAL and self.tensorpot_dataset_offsets and DATASET_ID_COL in datadf.columns:
+            if NUMBER_OF_ATOMS in datadf.columns:
+                natoms = datadf[NUMBER_OF_ATOMS].to_numpy()
+            elif ASE_ATOMS in datadf.columns:
+                natoms = datadf[ASE_ATOMS].map(len).to_numpy()
+            else:
+                natoms = None
+            if natoms is not None:
+                per_atom_offsets = datadf[DATASET_ID_COL].map(lambda ds: self.tensorpot_dataset_offsets.get(ds, 0.0)).to_numpy()
+                datadf = datadf.copy()
+                datadf[energy_col] = datadf[energy_col].to_numpy() + per_atom_offsets * natoms
+                if ENERGY in datadf.columns:
+                    datadf[ENERGY] = datadf[ENERGY].to_numpy() + per_atom_offsets * natoms
+                if E_CORRECTED_PER_ATOM_COLUMN in datadf.columns:
+                    datadf[E_CORRECTED_PER_ATOM_COLUMN] = datadf[energy_col] / natoms
+
         datadf[force_col] = datadf[force_col].apply(np.array)
         datadf['w_forces'] = datadf['w_forces'].apply(np.reshape, newshape=[-1, 1])
         de = prediction['energy_pred'] - datadf[energy_col]
         df = prediction['forces_pred'] - datadf[force_col]
         e_loss = float(np.sum(datadf['w_energy'] * de ** 2))
         f_loss = np.sum((datadf['w_forces'] * df ** 2).map(np.sum))
+        if self.backend_config.evaluator_name == TENSORPOT_EVAL:
+            nat_for_log = datadf[nat_column].to_numpy() if nat_column in datadf.columns else None
+            if nat_for_log is None and ASE_ATOMS in datadf.columns:
+                nat_for_log = datadf[ASE_ATOMS].map(len).to_numpy()
+            de_values = de.to_numpy() if hasattr(de, "to_numpy") else np.asarray(de)
+            if nat_for_log is not None and len(de_values) == len(nat_for_log):
+                de_pa = de_values / nat_for_log
+                sort_idx = np.argsort(np.abs(de_pa))
+                worst_idx = sort_idx[-5:][::-1]
+                for pos, idx in enumerate(worst_idx, start=1):
+                    ds_id = datadf.iloc[idx][DATASET_ID_COL] if DATASET_ID_COL in datadf.columns else "n/a"
+                    log.info("TensorFlow backend: worst energy residual #%d (global idx=%d, ids=%s) dE=%.6f eV, dE/atom=%.6f eV",
+                             pos, idx, ds_id, float(de_values[idx]), float(de_pa[idx]))
 
         mae_pae = np.mean(np.abs(de / datadf[nat_column]))
         mae_e = np.mean(np.abs(de))
