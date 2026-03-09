@@ -19,6 +19,7 @@ from pyace.multispecies_basisextension import expand_trainable_parameters, compu
 from pyace.lossfuncspec import LossFunctionSpecification
 from pyace.const import *
 from pyace.metrics_aggregator import FitMetrics, MetricsAggregator
+from pyace.utils.source_energy_offsets import SourceEnergyOffsetManager
 import __main__
 
 required_structures_dataframe_columns = [ATOMIC_ENV_COL, ENERGY_CORRECTED_COL, FORCES_COL]
@@ -88,7 +89,7 @@ class PyACEFit:
 
     def __init__(self, basis: Union[BBasisConfiguration] = None, structures_dataframe: pd.DataFrame = None,
                  loss_spec: LossFunctionSpecification = None, seed=None, executors_kw_args=None, display_step=10,
-                 trainable_parameters=None):
+                 trainable_parameters=None, energy_offset_manager: SourceEnergyOffsetManager = None):
 
         if basis is not None:
             if isinstance(basis, BBasisConfiguration):
@@ -153,6 +154,8 @@ class PyACEFit:
         self.last_fit_metric_data = None
         self.last_test_metric_data = None
         self.fit_metric_callback = None
+        self.energy_offset_manager = energy_offset_manager
+        self.last_source_energy_offsets = {}
 
     def _init_trainable_params(self):
         self.trainable_params_mask = compute_bbasisset_train_mask(self.bbasis, self.trainable_parameters_dict)
@@ -210,7 +213,23 @@ class PyACEFit:
         energy_forces_pred_df = self.predict_energy_forces(params, keep_parallel_dataexecutor=True)
 
         total_na = self.structures_dataframe["NUMBER_OF_ATOMS"].values
-        dE = (energy_forces_pred_df[ENERGY_PRED_COL] - self.structures_dataframe[ENERGY_CORRECTED_COL]).values
+        energy_pred = energy_forces_pred_df[ENERGY_PRED_COL].to_numpy(dtype=float)
+        energy_target = self.structures_dataframe[ENERGY_CORRECTED_COL].to_numpy(dtype=float)
+        energy_target_per_atom = energy_target / total_na
+
+        if self.energy_offset_manager is not None and self.energy_offset_manager.enabled:
+            offsets = self.energy_offset_manager.fit_offsets(self.structures_dataframe, energy_pred)
+            self.last_source_energy_offsets = offsets
+            energy_target = self.energy_offset_manager.get_adjusted_target_energies(
+                self.structures_dataframe, offsets=offsets
+            )
+            energy_target_per_atom = self.energy_offset_manager.get_adjusted_target_energies_per_atom(
+                self.structures_dataframe, offsets=offsets
+            )
+        else:
+            self.last_source_energy_offsets = {}
+
+        dE = energy_pred - energy_target
         dE_per_atom = dE / total_na
         dF = (self.structures_dataframe[FORCES_COL] - energy_forces_pred_df[FORCES_PRED_COL]).values
 
@@ -219,8 +238,14 @@ class PyACEFit:
         # de = dE #np.hstack(dE.tolist())
         # de_pa = dE_per_atom #np.hstack(dE_per_atom.tolist())
         df = np.vstack(dF)  # np.vstack([v.reshape(-1, 3) for v in dF.tolist()])
-        self.metrics.compute_metrics(dE.reshape(-1, 1), dE_per_atom.reshape(-1, 1), df,
-                                     total_na, dataframe=self.structures_dataframe)
+        self.metrics.compute_metrics(
+            dE.reshape(-1, 1),
+            dE_per_atom.reshape(-1, 1),
+            df,
+            total_na,
+            dataframe=self.structures_dataframe,
+            energy_reference_per_atom=energy_target_per_atom,
+        )
 
         if self.loss_spec.kappa < 1:
             # dEsqr = dE ** 2
@@ -276,6 +301,10 @@ class PyACEFit:
         curr_fit_metrics_data = self.metrics.to_FitMetricsDict()
         curr_fit_metrics_data["eval_count"] = self.eval_count
         curr_fit_metrics_data["iter_num"] = self.iter_num
+        if self.last_source_energy_offsets:
+            curr_fit_metrics_data["source_energy_offsets"] = self.energy_offset_manager.serialize_offsets(
+                self.last_source_energy_offsets
+            )
         # store metrics_data into dict (x-> curr_fit_metrics_data)
         self.fit_metrics_data_dict[hash(params.tobytes())] = curr_fit_metrics_data
         self.last_fit_metric_data = curr_fit_metrics_data

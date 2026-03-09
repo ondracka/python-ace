@@ -126,7 +126,7 @@ class FitMetrics:
         if "nfuncs" in fit_metrics_dict:
             self.nfuncs = fit_metrics_dict["nfuncs"]
 
-    def compute_metrics(self, de, de_pa, df, nat, dataframe=None, de_low=None):
+    def compute_metrics(self, de, de_pa, df, nat, dataframe=None, de_low=None, energy_reference_per_atom=None):
         if de_low is None:
             de_low = 1.
         self.nat = np.sum(nat)
@@ -159,6 +159,10 @@ class FitMetrics:
                 if E_CHULL_DIST_PER_ATOM in dataframe.columns:
                     nrgs = dataframe[E_CHULL_DIST_PER_ATOM].to_numpy().reshape(-1, )
                     mask = nrgs <= de_low
+                elif energy_reference_per_atom is not None:
+                    nrgs = np.asarray(energy_reference_per_atom, dtype=float).reshape(-1, )
+                    emin = min(nrgs)
+                    mask = (nrgs <= (emin + de_low))
                 else:
                     nrgs = dataframe['energy_corrected'].to_numpy().reshape(-1, ) / nat.reshape(-1, )
                     emin = min(nrgs)

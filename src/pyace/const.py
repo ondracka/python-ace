@@ -45,6 +45,7 @@ FIT_LADDER_STEP_KW = 'ladder_step'
 FIT_LADDER_TYPE_KW = 'ladder_type'
 FIT_NOISE_REL_SIGMA = "noise_relative_sigma"
 FIT_NOISE_ABS_SIGMA = "noise_absolute_sigma"
+FIT_SOURCE_ENERGY_OFFSETS_KW = "source_energy_offsets"
 
 BACKEND_EVALUATOR_KW = 'evaluator'
 TARGET_POTENTIAL_YAML = "target_potential.yaml"
