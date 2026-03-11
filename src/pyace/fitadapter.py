@@ -389,6 +389,37 @@ class FitBackendAdapter:
             return {}
         return getattr(self.fitter, "last_source_energy_offsets", {}) or {}
 
+    @staticmethod
+    def _format_source_energy_offsets(offsets):
+        if not offsets:
+            return None
+
+        def sort_key(item):
+            key = item[0]
+            try:
+                return 0, float(key)
+            except (TypeError, ValueError):
+                return 1, str(key)
+
+        return ", ".join(
+            f"{label}={float(value):.12g} eV/atom"
+            for label, value in sorted(offsets.items(), key=sort_key)
+        )
+
+    def log_source_energy_offsets(self, fit_metric_data=None, prefix=None):
+        offsets = None
+        if fit_metric_data is not None:
+            offsets = fit_metric_data.get(FIT_SOURCE_ENERGY_OFFSETS_KW)
+        if not offsets:
+            offsets = self.get_last_source_energy_offsets()
+        formatted_offsets = self._format_source_energy_offsets(offsets)
+        if formatted_offsets is None:
+            return
+
+        if prefix is None:
+            prefix = "Fitted source-specific per-atom energy offsets"
+        log.info("%s: %s", prefix, formatted_offsets)
+
     def _apply_source_offsets_to_prediction(self, prediction, structures_dataframe):
         if structures_dataframe is None:
             return prediction

@@ -1,3 +1,9 @@
+metadata:
+  ace_evaluator_version: 2023.11.25
+  pacemaker_version: 0.2.7+174.g235844a
+  starttime: 2026-03-11 12:12:06.342635
+  tensorpot_version: 0+untagged.22.g1e44b25.dirty
+  user: ondracka
 global:
   DeltaSplineBins: 0.001
 species:

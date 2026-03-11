@@ -573,6 +573,10 @@ class GeneralACEFit:
             self.fit_backend.last_fit_metric_data["cycle_step"] = self.current_fit_cycle
             self.fit_backend.last_fit_metric_data["ladder_step"] = self.current_ladder_step
             self.metrics_aggregator.cycle_step_callback(self.fit_backend.last_fit_metric_data)
+            self.fit_backend.log_source_energy_offsets(
+                self.fit_backend.last_fit_metric_data,
+                prefix="Fitted source-specific per-atom energy offsets",
+            )
 
             last_test_metric_data = self.fit_backend.last_test_metric_data
             if last_test_metric_data:
@@ -619,6 +623,10 @@ class GeneralACEFit:
         # restore the best fitting metric data
         best_fitting_metric_data = fitting_attempts_list[best_fitting_attempts_ind][2]
         self.fit_backend.last_fit_metric_data = best_fitting_metric_data
+        self.fit_backend.log_source_energy_offsets(
+            best_fitting_metric_data,
+            prefix="Best-fit source-specific per-atom energy offsets",
+        )
         save_interim_potential(current_best_bbasisconfig, potential_filename="interim_potential_best_cycle.yaml")
         return current_best_bbasisconfig
 
