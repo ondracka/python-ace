@@ -1,0 +1,31 @@
+2026-03-06 13:52:57,009 I - Start pacemaker
+2026-03-06 13:52:57,009 I - Hostname: rosat.physics.muni.cz
+2026-03-06 13:52:57,009 I - Username: ondracka
+2026-03-06 13:52:57,009 I - pacemaker/pyace version: 0.2.7+172.gd1c213a.dirty
+2026-03-06 13:52:57,009 I - ace_evaluator   version: 2023.11.25
+2026-03-06 13:52:57,009 I - Loading input.yaml... 
+2026-03-06 13:52:57,020 I - Set numpy random seed to 42
+2026-03-06 13:52:57,179 I - Number of functions in target potential is limited to maximum 100 functions per element  for 1 elements (1 blocks)
+2026-03-06 13:52:57,179 I - Resulted potential contains 100 functions
+2026-03-06 13:52:57,179 I - Target potential shape constructed from dictionary, it contains 100 functions
+2026-03-06 13:52:58,886 I - tensorpot_version: 0+untagged.22.g1e44b25.dirty
+2026-03-06 13:52:58,887 I - User name automatically identified: ondracka
+2026-03-06 13:52:58,887 I - Search for dataset file(s): ['Cu-I-two-source-offset-100eVpa.pckl.gzip']
+2026-03-06 13:52:58,887 I - #1/1: try to load Cu-I-two-source-offset-100eVpa.pckl.gzip
+2026-03-06 13:52:58,887 I - Loading dataframe from pickle file Cu-I-two-source-offset-100eVpa.pckl.gzip (21.7KiB)
+2026-03-06 13:52:58,892 I -  105 structures found
+2026-03-06 13:52:58,895 I - Processing structures dataframe. Shape: (105, 12)
+2026-03-06 13:52:58,895 I - Total number of atoms: 368
+2026-03-06 13:52:58,895 I - Mean number of atoms per structure: 3.5
+2026-03-06 13:52:58,896 I - Min/max energy per atom: [-3.700, 96.487] eV/atom
+2026-03-06 13:52:58,896 I - Min/max abs energy per atom: [3.494, 96.487] eV/atom
+2026-03-06 13:52:58,902 I - Attaching SinglePointCalculator to ASE atoms...done
+2026-03-06 13:52:58,902 I - Construction of neighbour lists...
+2026-03-06 13:52:58,902 I - Building 'tp_atoms' (dataset size 105, cutoff=7.000A)...
+2026-03-06 13:52:58,945 I - Dataframe size after transform: 105
+2026-03-06 13:52:58,945 I - Construction of neighbour lists...done within 0.0432 sec (0.117 ms/atom)
+2026-03-06 13:52:58,946 I - No weighting policy is specified, setting default weighting policy
+2026-03-06 13:52:58,946 I - Apply weights policy: UniformWeightingPolicy()
+2026-03-06 13:52:58,956 I - Dataset saved into fitting_data_info.pckl.gzip
+2026-03-06 13:52:58,957 I - Plotting train energy-forces distribution
+2026-03-06 13:52:59,397 I - Dry run is finished

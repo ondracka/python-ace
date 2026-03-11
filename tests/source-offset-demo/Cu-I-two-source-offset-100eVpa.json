@@ -1,0 +1,23 @@
+{
+  "source_dataset": "/home/ondracka/software/python-ace/examples/Cu-I/Cu_df1_A1_A2_A3_EV_elast_phon.pckl.gzip",
+  "output_dataset": "/home/ondracka/software/python-ace/tests/source-offset-demo/Cu-I-two-source-offset-100eVpa.pckl.gzip",
+  "seed": 42,
+  "split_rule": "random half by row with deterministic permutation",
+  "rows_total": 105,
+  "rows_by_source": {
+    "1": 52,
+    "2": 53
+  },
+  "delta_per_atom_by_source": {
+    "1": 0.0,
+    "2": 100.0
+  },
+  "mean_total_offset_by_source": {
+    "1": 0.0,
+    "2": 256.60377358490564
+  },
+  "nat_range": [
+    1,
+    96
+  ]
+}
