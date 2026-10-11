@@ -135,6 +135,8 @@ def enable(reorder=False, radial=False, share_radial=False):
     exec(compile(source, '<wbc-native-moments>', 'exec'), namespace)
     # The existing ACE loops/branches are Python-static at tracing time.
     ACE.eval_atomic_energy = tf.autograph.experimental.do_not_convert(namespace['eval_atomic_energy'])
+    ACE.eval_atomic_energy._wbc_source = source
+    ACE.eval_atomic_energy._wbc_globals = namespace
 
 
 if __name__ == '__main__':

@@ -178,6 +178,14 @@ def apply(names):
                    tf.function(bbasis_unsorted, jit_compile=True,
                                autograph=False, reduce_retracing=True))}
     for name in filter(None, names.split(',')):
+        if name in ('native-density', 'native-density-unshared'):
+            continue
         if name not in choices:
             raise ValueError(f'Unknown CPU experiment: {name}')
         choices[name]()
+    density_flags = set(names.split(',')) & {'native-density', 'native-density-unshared'}
+    if len(density_flags) > 1:
+        raise ValueError('Choose one density implementation')
+    if density_flags:
+        from native_density import enable
+        enable(share_products='native-density' in density_flags)

@@ -3,8 +3,8 @@
 
 Use the ace-cpu environment. Normal Pacemaker arguments are forwarded unchanged.
 The selected numerical rewrites apply only to this process, not to other jobs.
-Build native_basis.py, native_moments.py, native_angular.py and native_radial.py
-with --build after copying to a different CPU/environment.
+Build native_basis.py, native_moments.py, native_angular.py, native_radial.py
+and native_density.py with --build after copying to a different CPU/environment.
 """
 import os
 from pathlib import Path
@@ -24,7 +24,7 @@ def main():
     os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '2')
     os.environ['WBC_CPU_EXPERIMENTS'] = ('native-bbasis-block4,reordered-shared-radial,'
                                        'native-angular-split,prune-moment-outputs,'
-                                       'reuse-radial-derivatives')
+                                       'reuse-radial-derivatives,native-density')
 
     from fast_bfgs import enable
     enable()
@@ -38,7 +38,8 @@ def main():
     if not pacemaker.is_file():
         raise FileNotFoundError(f'No Pacemaker in this environment: {pacemaker}')
     print('CPU rewrites enabled: native SBessel recurrence with per-batch derivative '
-          'reuse, shared identical radial primitives, atom-blocked float64 ACE basis, '
+          'reuse, shared identical radial primitives, atom-blocked float64 ACE '
+          'densities with cross-rank product sharing, '
           'reordered neighbour moments with unused derivative outputs pruned '
           'and separate real/imaginary angular functions with exact '
           'first/second derivatives, and rank-two full BFGS. '
