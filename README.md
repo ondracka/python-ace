@@ -3,6 +3,11 @@
 This repository contains `pacemaker` - a tool for fitting of interatomic potentials in a general nonlinear Atomic Cluster Expansion (ACE) form.
 It is based on the `pyace` (this repo) and `tensorpotential`([another repo](https://github.com/ICAMS/TensorPotential)) Python packages.
 
+This branch also provides opt-in `pacemaker-cpu` acceleration, automatic
+AVX2/AVX-512 selection, and a standalone Conda environment installer.
+See [CPU fitting and installation](CPU-FITTING.md). Plain `pacemaker`
+retains its upstream behavior.
+
 # Installation
 
 Please follow [these](https://pacemaker.readthedocs.io/en/latest/pacemaker/install/) instructions.
