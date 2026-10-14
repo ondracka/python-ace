@@ -152,6 +152,18 @@ def apply(names):
     def reuse_radial():
         from native_radial import enable_derivative_reuse
         enable_derivative_reuse()
+    def radial_trig():
+        from native_radial import enable_trig_recurrence
+        enable_trig_recurrence()
+    def prune_density():
+        from native_density import enable_output_pruning
+        enable_output_pruning()
+    def reuse_density():
+        from native_density import enable_product_reuse
+        enable_product_reuse()
+    def compact_density():
+        from native_density import enable_compact_workspace
+        enable_compact_workspace()
     choices = {'nested': lambda: setattr(TensorPotential, 'compute_grad', nested_grad),
                'directional': lambda: setattr(TensorPotential, 'compute_grad', directional_grad),
                'shared-products': lambda: setattr(ACE, 'compute_bbasis_funcs', shared_bbasis),
@@ -167,6 +179,10 @@ def apply(names):
                'native-angular-split': lambda: native_angular(split=True),
                'prune-moment-outputs': prune_moments,
                'reuse-radial-derivatives': reuse_radial,
+               'radial-trig-recurrence': radial_trig,
+               'prune-density-outputs': prune_density,
+               'reuse-density-products': reuse_density,
+               'compact-density-workspace': compact_density,
                'radial': lambda: setattr(radial_functions, 'simplified_bessel', vector_bessel),
                'radial-jit': lambda: setattr(radial_functions, 'simplified_bessel',
                    tf.function(vector_bessel, jit_compile=True, autograph=False,
@@ -178,7 +194,7 @@ def apply(names):
                    tf.function(bbasis_unsorted, jit_compile=True,
                                autograph=False, reduce_retracing=True))}
     for name in filter(None, names.split(',')):
-        if name in ('native-density', 'native-density-unshared'):
+        if name in ('native-density', 'native-density-unshared', 'all-bond-moments'):
             continue
         if name not in choices:
             raise ValueError(f'Unknown CPU experiment: {name}')
@@ -189,3 +205,6 @@ def apply(names):
     if density_flags:
         from native_density import enable
         enable(share_products='native-density' in density_flags)
+    if 'all-bond-moments' in names.split(','):
+        from native_all_moments import enable
+        enable()

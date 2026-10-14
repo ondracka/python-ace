@@ -16,17 +16,16 @@ import numpy as np
 from numpy.polynomial import Polynomial
 import tensorflow as tf
 
+from native_build import compiler_settings
+
 ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / 'native_angular_op.cc'
 _module = None
 
 
 def build_spec():
-    compiler = os.environ.get('CXX', 'g++')
-    flags = ['-std=c++17', '-shared', '-fPIC', '-O3', '-march=native', '-ffp-contract=off']
+    compiler, flags, version, target = compiler_settings()
     flags += tf.sysconfig.get_compile_flags() + tf.sysconfig.get_link_flags()
-    version = subprocess.check_output([compiler, '--version'], text=True).splitlines()[0]
-    target = subprocess.check_output([compiler, '-march=native', '-Q', '--help=target'])
     identity = dict(tensorflow=tf.__version__, compiler=version, flags=flags,
                     native_target_sha256=hashlib.sha256(target).hexdigest(),
                     source_sha256=hashlib.sha256(SOURCE.read_bytes()).hexdigest())

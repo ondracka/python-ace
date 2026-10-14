@@ -14,18 +14,18 @@ import subprocess
 import numpy as np
 import tensorflow as tf
 
+from native_build import compiler_settings
+
 ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / 'native_radial_op.cc'
 _module = None
 _reuse_derivative = False
+_trig_recurrence = False
 
 
 def build_spec():
-    compiler = os.environ.get('CXX', 'g++')
-    flags = ['-std=c++17', '-shared', '-fPIC', '-O3', '-march=native', '-ffp-contract=off']
+    compiler, flags, version, target = compiler_settings()
     flags += tf.sysconfig.get_compile_flags() + tf.sysconfig.get_link_flags()
-    version = subprocess.check_output([compiler, '--version'], text=True).splitlines()[0]
-    target = subprocess.check_output([compiler, '-march=native', '-Q', '--help=target'])
     identity = dict(tensorflow=tf.__version__, compiler=version, flags=flags,
                     native_target_sha256=hashlib.sha256(target).hexdigest(),
                     source_sha256=hashlib.sha256(SOURCE.read_bytes()).hexdigest())
@@ -44,11 +44,13 @@ def load():
 
     @tf.RegisterGradient('WbcRadial')
     def grad(op, seed):
-        return [_module.wbc_radial_grad(*op.inputs, seed), None, None]
+        return [_module.wbc_radial_grad(*op.inputs, seed,
+                    trig_recurrence=op.get_attr('trig_recurrence')), None, None]
 
     @tf.RegisterGradient('WbcRadialGrad')
     def second(op, direction):
-        dr, ds = _module.wbc_radial_grad_grad(*op.inputs, direction)
+        dr, ds = _module.wbc_radial_grad_grad(*op.inputs, direction,
+                    trig_recurrence=op.get_attr('trig_recurrence'))
         return [dr, None, None, ds]
 
     return _module
@@ -76,38 +78,51 @@ def enable_derivative_reuse():
     _reuse_derivative = True
 
 
-@tf.custom_gradient
-def _value_with_reused_derivative(distances, settings, recurrence):
+def enable_trig_recurrence():
+    global _trig_recurrence
+    _trig_recurrence = True
+
+
+def _value_with_reused_derivative(distances, settings, recurrence, trig_recurrence=False):
     """Retain g' for this call and explicitly supply the complete second VJP.
 
     The auxiliary derivative is internal, not a second differentiable output.
     This avoids asking TF to differentiate a zero seed on that output and
     inadvertently constructing an unnecessary third coordinate derivative.
     """
-    value, derivative = load().wbc_radial_with_derivative(distances, settings, recurrence)
+    @tf.custom_gradient
+    def value(r, fixed_settings, fixed_recurrence):
+        result, derivative = load().wbc_radial_with_derivative(
+            r, fixed_settings, fixed_recurrence, trig_recurrence=trig_recurrence)
 
-    def first(seed):
-        @tf.custom_gradient
-        def contraction(r, incoming, cached_derivative):
-            result = tf.reduce_sum(incoming * cached_derivative, axis=1, keepdims=True)
+        def first(seed):
+            @tf.custom_gradient
+            def contraction(x, incoming, cached_derivative):
+                result = tf.reduce_sum(incoming * cached_derivative, axis=1, keepdims=True)
 
-            def second(direction):
-                dr, _ = load().wbc_radial_grad_grad(r, settings, recurrence, incoming, direction)
-                return dr, direction * cached_derivative, None
+                def second(direction):
+                    dr, _ = load().wbc_radial_grad_grad(
+                        x, fixed_settings, fixed_recurrence, incoming, direction,
+                        trig_recurrence=trig_recurrence)
+                    return dr, direction * cached_derivative, None
 
-            return result, second
+                return result, second
 
-        return contraction(distances, seed, tf.stop_gradient(derivative)), None, None
+            return contraction(r, seed, tf.stop_gradient(derivative)), None, None
 
-    return value, first
+        return result, first
+
+    return value(distances, settings, recurrence)
 
 
-def evaluate(distances, count, rcut, rin=0., delta=0., reuse_derivative=None):
+def evaluate(distances, count, rcut, rin=0., delta=0., reuse_derivative=None,
+             trig_recurrence=None):
     reuse = _reuse_derivative if reuse_derivative is None else reuse_derivative
+    trig = _trig_recurrence if trig_recurrence is None else trig_recurrence
     inputs = (distances, tf.constant([rcut, rin, delta], tf.float64), plan(count))
     if reuse:
-        return _value_with_reused_derivative(*inputs)
-    return load().wbc_radial(*inputs)
+        return _value_with_reused_derivative(*inputs, trig_recurrence=trig)
+    return load().wbc_radial(*inputs, trig_recurrence=trig)
 
 
 def bond_radial(potential, distances, spec):

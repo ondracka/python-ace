@@ -16,21 +16,39 @@ import textwrap
 import numpy as np
 import tensorflow as tf
 
+from native_build import compiler_settings, vector_width_flags
+
 ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / 'native_density_op.cc'
 _module = None
 _share_products = True
+_prune_unused = False
+_reuse_products = False
+_compact_workspace = False
 
 
 def build_spec():
-    compiler = os.environ.get('CXX', 'g++')
-    flags = ['-std=c++17', '-shared', '-fPIC', '-O3', '-march=native', '-ffp-contract=off']
+    compiler, flags, version, target = compiler_settings()
+    block = os.environ.get('WBC_CPU_DENSITY_BLOCK', '4')
+    if block not in ('4', '8'):
+        raise ValueError('WBC_CPU_DENSITY_BLOCK must be 4 or 8')
+    if block != '4':
+        flags.append(f'-DWBC_DENSITY_BLOCK={block}')
+    packed = os.environ.get('WBC_CPU_DENSITY_PACKED', '0')
+    if packed not in ('0', '1') or (packed == '1' and block != '4'):
+        raise ValueError('WBC_CPU_DENSITY_PACKED must be 0 or 1, and requires four-atom blocks')
+    if packed == '1':
+        flags.append('-DWBC_DENSITY_PACKED_AVX512=1')
+    flags += vector_width_flags('WBC_CPU_DENSITY_VECTOR_BITS')
     flags += tf.sysconfig.get_compile_flags() + tf.sysconfig.get_link_flags()
-    version = subprocess.check_output([compiler, '--version'], text=True).splitlines()[0]
-    target = subprocess.check_output([compiler, '-march=native', '-Q', '--help=target'])
     identity = dict(tensorflow=tf.__version__, compiler=version, flags=flags,
                     native_target_sha256=hashlib.sha256(target).hexdigest(),
-                    source_sha256=hashlib.sha256(SOURCE.read_bytes()).hexdigest())
+                    source_sha256=hashlib.sha256(SOURCE.read_bytes()).hexdigest(),
+                    compact_header_sha256=hashlib.sha256(
+                        (ROOT / 'native_density_compact.h').read_bytes()).hexdigest())
+    if packed == '1':
+        identity['packed_header_sha256'] = hashlib.sha256(
+            (ROOT / 'native_density_packed.h').read_bytes()).hexdigest()
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
     return compiler, flags, identity, ROOT / 'compiled' / f'native-density-{digest}.so'
 
@@ -46,17 +64,105 @@ def load():
 
     @tf.RegisterGradient('WbcDensity')
     def gradient(op, seed):
-        ar, ai, weights = _module.wbc_density_grad(*op.inputs, seed)
+        ar, ai, weights = _module.wbc_density_grad(
+            *op.inputs, seed, prune_unused=op.get_attr('prune_unused'),
+            compact_workspace=op.get_attr('compact_workspace'))
         return [ar, ai, None, None, None, weights]
 
     @tf.RegisterGradient('WbcDensityGrad')
     def second_gradient(op, hr, hi, hw):
+        prune = op.get_attr('prune_unused')
         directions = [tf.zeros_like(op.inputs[index]) if h is None else h
                       for index, h in zip((0, 1, 5), (hr, hi, hw))]
-        ar, ai, weights, seed = _module.wbc_density_grad_grad(*op.inputs, *directions)
+        ar, ai, weights, seed = _module.wbc_density_grad_grad(
+            *op.inputs, *directions, prune_unused=prune,
+            compact_workspace=op.get_attr('compact_workspace'),
+            zero_weight_direction=prune and _structurally_zero(hw))
         return [ar, ai, None, None, None, weights, seed]
 
     return _module
+
+
+def enable_output_pruning():
+    global _prune_unused
+    _prune_unused = True
+
+
+def enable_product_reuse():
+    global _reuse_products
+    _reuse_products = True
+
+
+def enable_compact_workspace():
+    global _compact_workspace
+    _compact_workspace = True
+
+
+def _structurally_zero(value):
+    """Recognize only graph-constant zero directions, never current fit values."""
+    if value is None:
+        return True
+    if tf.executing_eagerly():
+        return False
+    op = value.op
+    if op.type == 'ZerosLike':
+        return True
+    if op.type in ('Identity', 'StopGradient'):
+        return _structurally_zero(op.inputs[0])
+    if op.type == 'Fill':
+        scalar = tf.get_static_value(op.inputs[1])
+        return scalar is not None and np.ndim(scalar) == 0 and bool(scalar == 0)
+    if op.type == 'Const':
+        constant = tf.get_static_value(value)
+        return constant is not None and bool(np.all(constant == 0))
+    return False
+
+
+def evaluate(ar, ai, left, right, terms, weights, prune_unused=None, reuse_products=None,
+             compact_workspace=None):
+    prune = _prune_unused if prune_unused is None else prune_unused
+    reuse = _reuse_products if reuse_products is None else reuse_products
+    compact = _compact_workspace if compact_workspace is None else compact_workspace
+    if compact and reuse:
+        raise ValueError('Compact density workspaces are incompatible with product caching')
+    module = load()
+    if not reuse:
+        return module.wbc_density(ar, ai, left, right, terms, weights, prune_unused=prune,
+                                  compact_workspace=compact)
+
+    @tf.custom_gradient
+    def value(a_r, a_i, coefficients):
+        rho, products_r, products_i = module.wbc_density_cached(
+            a_r, a_i, left, right, terms, coefficients, prune_unused=prune)
+
+        def first(seed):
+            @tf.custom_gradient
+            def backward(x_r, x_i, c, incoming, saved_r, saved_i):
+                derivatives = module.wbc_density_cached_grad(
+                    x_r, x_i, left, right, terms, c, incoming, saved_r, saved_i,
+                    prune_unused=prune)
+
+                def second(hr, hi, hw):
+                    directions = [tf.zeros_like(x) if h is None else h
+                                  for x, h in zip((x_r, x_i, c), (hr, hi, hw))]
+                    dr, di, dw, ds = module.wbc_density_cached_grad_grad(
+                        x_r, x_i, left, right, terms, c, incoming, *directions,
+                        saved_r, saved_i, prune_unused=prune,
+                        zero_weight_direction=prune and _structurally_zero(hw))
+                    # This op supplies the total Hessian-vector product, including
+                    # product dependence on x_r/x_i. Do not differentiate the
+                    # auxiliary cache separately and count that dependence twice.
+                    return dr, di, dw, ds, None, None
+
+                return tuple(derivatives), second
+
+            return backward(a_r, a_i, coefficients, seed,
+                            tf.stop_gradient(products_r), tf.stop_gradient(products_i))
+
+        return rho, first
+
+    return value(tf.convert_to_tensor(ar, tf.float64), tf.convert_to_tensor(ai, tf.float64),
+                 tf.convert_to_tensor(weights, tf.float64))
 
 
 def make_plan(potential, central, share_products=True):
@@ -108,7 +214,7 @@ def density(self, ar_parts, ai_parts, central, coefs):
     weights = tf.math.unsorted_segment_sum(
         tf.gather(coefs, plan['basis_ids']) * tf.constant(plan['cg'][:, None], tf.float64),
         plan['segments'], len(plan['nodes']))
-    result = load().wbc_density(ar, ai, plan['left'], plan['right'], plan['nodes'], weights)
+    result = evaluate(ar, ai, plan['left'], plan['right'], plan['nodes'], weights)
     return tf.transpose(result, [1, 0])
 
 

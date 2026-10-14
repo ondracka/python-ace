@@ -12,7 +12,8 @@
 using namespace tensorflow;
 using shape_inference::InferenceContext;
 #define RADIAL_INPUTS \
-    .Input("r: double").Input("settings: double").Input("plan: double")
+    .Input("r: double").Input("settings: double").Input("plan: double") \
+    .Attr("trig_recurrence: bool = false")
 
 REGISTER_OP("WbcRadial") RADIAL_INPUTS .Output("g: double")
     .SetShapeFn([](InferenceContext* c) {
@@ -44,8 +45,16 @@ REGISTER_OP("WbcRadialGradGrad") RADIAL_INPUTS
 template <int mode>
 class WbcRadialKernel : public OpKernel {
  public:
-  explicit WbcRadialKernel(OpKernelConstruction* c) : OpKernel(c) {}
+  explicit WbcRadialKernel(OpKernelConstruction* c) : OpKernel(c) {
+    OP_REQUIRES_OK(c, c->GetAttr("trig_recurrence", &trig_recurrence_));
+  }
   void Compute(OpKernelContext* c) override {
+    if (trig_recurrence_) ComputeImpl<true>(c);
+    else ComputeImpl<false>(c);
+  }
+
+  template <bool trig_recurrence>
+  void ComputeImpl(OpKernelContext* c) {
     const Tensor& distances = c->input(0);
     OP_REQUIRES(c, distances.dims() == 2 && distances.dim_size(1) == 1 &&
                 c->input(1).shape() == TensorShape({3}) && c->input(2).dims() == 2 &&
@@ -101,6 +110,20 @@ class WbcRadialKernel : public OpKernel {
           if constexpr (mode >= 1) q1 = -0.5 * 7.5 * (0.25 - x2 / 2. + x4 / 4.) * dx;
           if (need_second) q2 = -0.5 * 7.5 * (-x + x3) * dx * dx;
         }
+        const double base_phase = d * pi / rc;
+        // Keep the old near-zero path, where cancellation in analytic sinc
+        // derivatives could amplify recurrence roundoff. Re-anchor every 16
+        // frequencies, bounding drift for larger bases as well as WBC's 15.
+        const bool use_trig = trig_recurrence && std::abs(base_phase) >= 0.02;
+        double base_sin = 0., base_cos = 0., running_sin = 0., running_cos = 0.;
+        if constexpr (trig_recurrence) {
+          if (use_trig) {
+            base_sin = std::sin(base_phase);
+            base_cos = std::cos(base_phase);
+            running_sin = base_sin;
+            running_cos = base_cos;
+          }
+        }
         for (int64_t k = 0; k <= nf; ++k) {
           const double phase = d * (k + 1.) * pi / rc;
           const double frequency = (k + 1.) * pi / rc;
@@ -113,10 +136,32 @@ class WbcRadialKernel : public OpKernel {
             }
             if (need_second) second[k] = (-1./3. + z * (1./10. + z * (-1./168. + z/6480.))) * frequency * frequency;
           } else {
-            const double sn = std::sin(phase);
+            double sn, cs = 0.;
+            if constexpr (trig_recurrence) {
+              if (use_trig) {
+                if (k != 0) {
+                  if (k % 16 == 0) {
+                    running_sin = std::sin(phase);
+                    running_cos = std::cos(phase);
+                  } else {
+                    const double next_sin = running_sin * base_cos + running_cos * base_sin;
+                    running_cos = running_cos * base_cos - running_sin * base_sin;
+                    running_sin = next_sin;
+                  }
+                }
+                sn = running_sin;
+                cs = running_cos;
+              } else {
+                sn = std::sin(phase);
+                if constexpr (mode >= 1) cs = std::cos(phase);
+              }
+            } else {
+              sn = std::sin(phase);
+              if constexpr (mode >= 1) cs = std::cos(phase);
+            }
             sinc[k] = sn / phase;
             if constexpr (mode >= 1) {
-              const double df = (std::cos(phase) - sinc[k]) / phase;
+              const double df = (cs - sinc[k]) / phase;
               first[k] = df * frequency;
               if (need_second) second[k] = (-sn - 2. * df) / phase * frequency * frequency;
             }
@@ -153,6 +198,8 @@ class WbcRadialKernel : public OpKernel {
     const auto* workers = c->device()->tensorflow_cpu_worker_threads();
     Shard(workers->num_threads, workers->workers, np, nf * (mode == 0 ? 70 : 120), work);
   }
+ private:
+  bool trig_recurrence_;
 };
 
 REGISTER_KERNEL_BUILDER(Name("WbcRadial").Device(DEVICE_CPU), WbcRadialKernel<0>);

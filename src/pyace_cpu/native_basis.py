@@ -15,6 +15,8 @@ import subprocess
 import numpy as np
 import tensorflow as tf
 
+from native_build import compiler_settings
+
 ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / 'native_basis_op.cc'
 _module = None
@@ -22,11 +24,8 @@ _block_size = 1
 
 
 def build_spec():
-    compiler = os.environ.get('CXX', 'g++')
-    flags = ['-std=c++17', '-shared', '-fPIC', '-O3', '-march=native', '-ffp-contract=off']
+    compiler, flags, compiler_version, native_options = compiler_settings()
     flags += tf.sysconfig.get_compile_flags() + tf.sysconfig.get_link_flags()
-    compiler_version = subprocess.check_output([compiler, '--version'], text=True).splitlines()[0]
-    native_options = subprocess.check_output([compiler, '-march=native', '-Q', '--help=target'])
     identity = dict(tensorflow=tf.__version__, compiler=compiler_version, flags=flags,
                     native_target_sha256=hashlib.sha256(native_options).hexdigest(),
                     source_sha256=hashlib.sha256(SOURCE.read_bytes()).hexdigest())
