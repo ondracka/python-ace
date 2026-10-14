@@ -146,3 +146,38 @@ two-worker smoke fit matched ordinary Pacemaker to approximately 1e-16 in
 the reported loss/RMSEs and 2e-17 in fitted coefficients. AVX-512 selection
 logic and rejection on an unsupported CPU were checked separately. AVX-512
 execution was not retested on Rosat, which lacks that instruction set.
+
+## AVX2 arithmetic refinements
+
+The non-packed compact density kernel now specializes the common two-channel
+embedding while retaining a generic path for other channel counts. It also
+uses real terminal adjoints directly, skipping mathematically zero imaginary
+terms and structurally zero coefficient-direction terms. Intermediate
+complex adjoints, product order and reverse accumulation order are unchanged.
+These changes do not require wider vectors or a different model.
+
+An AMD Ryzen 9 3900X check used 12 single-thread workers, 6120 structures,
+597872 atoms, 12000 basis functions and batches of two. All variants used the
+same portable GCC AVX2 build, worker settings and TensorFlow BFC buffer reuse
+with a 2048 MiB per-process pool cap. Median full loss-and-gradient times were:
+
+| Compact kernel | Seconds | Measured passes |
+| --- | ---: | ---: |
+| Before these refinements | 46.43 | 5 |
+| Two-channel specialization only | 45.52 | 5 |
+| Real terminal adjoints only | 44.66 | 3 |
+| Both refinements | 43.12 | 3 |
+
+Every timing followed a complete untimed warmup. Separate uncontended
+control passes gave 45.81-46.48 seconds. Runs interrupted by unrelated work
+were excluded. The combined change reduces evaluation time by about 7.1%,
+or increases throughput by about 7.7%. These are evaluator timings, not
+whole BFGS iteration times or a prediction for other models and machines.
+
+All full-dataset loss, coefficient-gradient, energy and force arrays were
+bit-for-bit identical. The synthetic density checks also passed with one
+and three threads, one/two/three channels, and four/eight-atom AVX2 blocks.
+A coefficient perturbation/restoration check agreed exactly, and the
+two-step synthetic fit retained the agreement with ordinary Pacemaker
+reported above. Both ISA builds compile, with AVX-512 execution still
+untested on Rosat. The packed AVX-512 algorithm is unchanged.
