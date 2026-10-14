@@ -15,7 +15,7 @@ import subprocess
 import numpy as np
 import tensorflow as tf
 
-from native_build import compiler_settings
+from .native_build import compiler_settings, cache_root
 
 ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / 'native_basis_op.cc'
@@ -30,7 +30,7 @@ def build_spec():
                     native_target_sha256=hashlib.sha256(native_options).hexdigest(),
                     source_sha256=hashlib.sha256(SOURCE.read_bytes()).hexdigest())
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
-    return compiler, flags, identity, ROOT / 'compiled' / f'native-basis-{digest}.so'
+    return compiler, flags, identity, cache_root() / f'native-basis-{digest}.so'
 
 
 def load():
@@ -121,7 +121,7 @@ if __name__ == '__main__':
     compiler, flags, identity, library = build_spec()
     if library.exists():
         raise FileExistsError(library)
-    library.parent.mkdir(exist_ok=True)
+    library.parent.mkdir(parents=True, exist_ok=True)
     command = [compiler, str(SOURCE), '-o', str(library)] + flags
     print(json.dumps(dict(event='compile', command=command, **identity)), flush=True)
     subprocess.run(command, check=True)

@@ -3,16 +3,21 @@
 
 Use the ace-cpu environment. Normal Pacemaker arguments are forwarded unchanged.
 The selected numerical rewrites apply only to this process, not to other jobs.
-Build native_basis.py, native_moments.py, native_angular.py, native_radial.py,
-native_density.py and native_all_moments.py with --build after copying to a
-different CPU/environment.
+Build the native operations with pacemaker-cpu-build after installation or
+changing the compiler/TensorFlow environment.
 """
 import os
 from pathlib import Path
 import runpy
 import sys
+from .runtime import configure, information
 
 def main():
+    isa = configure()
+    if sys.argv[1:] == ['--cpu-info']:
+        import json
+        print(json.dumps(information(), indent=2))
+        return
     workers = int(os.environ.get('WBC_CPU_WORKERS', '1'))
     cores = int(os.environ.get('WBC_CPU_THREADS', '12' if workers > 1 else '8'))
     if workers < 1 or cores < 1 or cores % workers:
@@ -40,18 +45,18 @@ def main():
     if compact == '1':
         os.environ['WBC_CPU_EXPERIMENTS'] += ',compact-density-workspace'
 
-    from fast_bfgs import enable
+    from .fast_bfgs import enable
     enable()
-    from cpu_experiments import apply
+    from .cpu_experiments import apply
     apply(os.environ['WBC_CPU_EXPERIMENTS'])
     if workers > 1:
-        from parallel_fit import enable as enable_workers
+        from .parallel_fit import enable as enable_workers
         enable_workers(workers, cores)
 
     pacemaker = Path(sys.executable).with_name('pacemaker')
     if not pacemaker.is_file():
         raise FileNotFoundError(f'No Pacemaker in this environment: {pacemaker}')
-    print('CPU rewrites enabled: native SBessel and trigonometric recurrences with per-batch derivative '
+    print(f'CPU ISA: {isa}. CPU rewrites enabled: native SBessel and trigonometric recurrences with per-batch derivative '
           'reuse, shared identical radial primitives, atom-blocked float64 ACE '
           'densities with cross-rank product sharing and unused density work pruned, '
           'all-bond primitive moments and rank-one sums without bond-type '

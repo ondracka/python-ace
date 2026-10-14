@@ -135,34 +135,34 @@ def apply(names):
     from tensorpotential.functions import radial_functions
     from tensorpotential.potentials.ace import ACE
     def fused():
-        from fused_product import enable
+        from .fused_product import enable
         enable()
     def native_basis(block_size=1):
-        from native_basis import enable
+        from .native_basis import enable
         enable(block_size=block_size)
     def native_moments(reorder=False, radial=False, share_radial=False):
-        from native_moments import enable
+        from .native_moments import enable
         enable(reorder=reorder, radial=radial, share_radial=share_radial)
     def native_angular(split=False):
-        from native_angular import enable
+        from .native_angular import enable
         enable(split=split)
     def prune_moments():
-        from native_moments import enable_output_pruning
+        from .native_moments import enable_output_pruning
         enable_output_pruning()
     def reuse_radial():
-        from native_radial import enable_derivative_reuse
+        from .native_radial import enable_derivative_reuse
         enable_derivative_reuse()
     def radial_trig():
-        from native_radial import enable_trig_recurrence
+        from .native_radial import enable_trig_recurrence
         enable_trig_recurrence()
     def prune_density():
-        from native_density import enable_output_pruning
+        from .native_density import enable_output_pruning
         enable_output_pruning()
     def reuse_density():
-        from native_density import enable_product_reuse
+        from .native_density import enable_product_reuse
         enable_product_reuse()
     def compact_density():
-        from native_density import enable_compact_workspace
+        from .native_density import enable_compact_workspace
         enable_compact_workspace()
     choices = {'nested': lambda: setattr(TensorPotential, 'compute_grad', nested_grad),
                'directional': lambda: setattr(TensorPotential, 'compute_grad', directional_grad),
@@ -203,8 +203,8 @@ def apply(names):
     if len(density_flags) > 1:
         raise ValueError('Choose one density implementation')
     if density_flags:
-        from native_density import enable
+        from .native_density import enable
         enable(share_products='native-density' in density_flags)
     if 'all-bond-moments' in names.split(','):
-        from native_all_moments import enable
+        from .native_all_moments import enable
         enable()

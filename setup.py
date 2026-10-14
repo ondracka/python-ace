@@ -201,7 +201,11 @@ setup(
     classifiers=[
         'Programming Language :: Python :: 3',
     ],
-    package_data={"pyace.data": [
+    entry_points={"console_scripts": [
+        "pacemaker-cpu=pyace_cpu.pacemaker_cpu:main",
+        "pacemaker-cpu-build=pyace_cpu.build:main",
+    ]},
+    package_data={"pyace_cpu": ["*.cc", "*.h"], "pyace.data": [
         "mus_ns_uni_to_rawlsLS_np_rank.pckl",
         "input_template.yaml"
     ]},

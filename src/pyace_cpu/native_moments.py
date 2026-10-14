@@ -14,7 +14,7 @@ import textwrap
 
 import tensorflow as tf
 
-from native_build import compiler_settings
+from .native_build import compiler_settings, cache_root
 
 ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / 'native_moments_op.cc'
@@ -29,7 +29,7 @@ def build_spec():
                     native_target_sha256=hashlib.sha256(target).hexdigest(),
                     source_sha256=hashlib.sha256(SOURCE.read_bytes()).hexdigest())
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
-    return compiler, flags, identity, ROOT / 'compiled' / f'native-moments-{digest}.so'
+    return compiler, flags, identity, cache_root() / f'native-moments-{digest}.so'
 
 
 def load():
@@ -109,7 +109,7 @@ def enable(reorder=False, radial=False, share_radial=False):
     source = source.replace(old, new)
     namespace = dict(original.__globals__, _wbc_moments=moments)
     if radial:
-        from native_radial import load as load_radial, bond_radial, partition_radial
+        from .native_radial import load as load_radial, bond_radial, partition_radial
         load_radial()
         radial_old = '''        comb_gjk = self.radial_function(part_d_ij[c_i],
                                         nfunc=nradbasei,
@@ -145,7 +145,7 @@ if __name__ == '__main__':
     compiler, flags, identity, library = build_spec()
     if library.exists():
         raise FileExistsError(library)
-    library.parent.mkdir(exist_ok=True)
+    library.parent.mkdir(parents=True, exist_ok=True)
     command = [compiler, str(SOURCE), '-o', str(library)] + flags
     print(json.dumps(dict(event='compile', command=command, **identity)), flush=True)
     subprocess.run(command, check=True)

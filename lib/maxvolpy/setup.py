@@ -10,12 +10,15 @@ from setuptools.extension import Extension
 from Cython.Build import cythonize
 import numpy
 import platform
+import os
 
 extensions = [
     Extension("maxvolpy._maxvol",
               ["maxvolpy/_maxvol.pyx"],
               include_dirs=[numpy.get_include()],
-              extra_compile_args=['-O3', '-march=native', '-ffast-math']
+              # Keep environment installs portable between login/compute CPUs.
+              # This helper has no runtime ISA dispatch of its own.
+              extra_compile_args=['-O3', '-march=' + os.environ.get('MAXVOLPY_ARCH', 'x86-64'), '-ffast-math']
               )
 ]
 

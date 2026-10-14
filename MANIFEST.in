@@ -1,2 +1,5 @@
 include versioneer.py
 include src/pyace/_version.py
+recursive-include src/pyace_cpu *.cc *.h
+recursive-include conda *.yml *.sh
+include CPU-FITTING.md

@@ -41,7 +41,7 @@ def _worker(connection, cpus, model, loss_specs, potential_options, batches,
         from tensorpotential.potentials.ace import ACE
         from tensorpotential.tensorpot import TensorPotential
         if os.environ.get('WBC_CPU_EXPERIMENTS'):
-            from cpu_experiments import apply
+            from .cpu_experiments import apply
             apply(os.environ['WBC_CPU_EXPERIMENTS'])
         tf.config.threading.set_intra_op_parallelism_threads(len(cpus))
         tf.config.threading.set_inter_op_parallelism_threads(1)

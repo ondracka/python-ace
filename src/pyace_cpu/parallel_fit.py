@@ -29,7 +29,7 @@ def physical_cpus(count):
 
 def enable(workers, cores):
     from tensorpotential.fit import FitTensorPotential
-    from parallel_batches import PersistentBatchPool
+    from .parallel_batches import PersistentBatchPool
     if workers < 2 or cores % workers:
         raise ValueError('Use at least two workers, evenly dividing the core count')
     if getattr(FitTensorPotential.fit, '_wbc_parallel', False):
