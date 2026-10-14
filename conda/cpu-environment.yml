@@ -1,0 +1,36 @@
+name: pacemaker-cpu
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.10.16
+  - pip
+  - numpy=1.26.4
+  - scipy=1.13.1
+  - pandas=2.0.0
+  - scikit-learn=1.4.2
+  - libblas=*=*openblas
+  - libcblas=*=*openblas
+  - liblapack=*=*openblas
+  - gxx_linux-64=14
+  - cmake=3.31
+  - git
+  - pip:
+      # Repeat numerical pins for pip so a transitive dependency cannot replace
+      # the Conda BLAS-linked packages with incompatible wheels.
+      - numpy==1.26.4
+      - scipy==1.13.1
+      - pandas==2.0.0
+      - scikit-learn==1.4.2
+      - ml_dtypes==0.5.4
+      - setuptools==69.5.1
+      - wheel==0.45.1
+      - Cython==3.0.12
+      - ninja==1.13.2
+      - tensorflow==2.21.0
+      - ase==3.29.0
+      - ruamel.yaml==0.19.1
+      - matplotlib==3.10.9
+      - psutil==7.2.2
+      - tqdm==4.70.1
+      - threadpoolctl==3.7.0
