@@ -4,17 +4,28 @@
 
 #include <array>
 
-template <int mode>
+template <int mode, int fixed_density = 0>
 void CompactDensity(
     const int64_t nf, const int64_t na, const int64_t np,
-    const int64_t nt, const int64_t nd, const int32* left,
+    const int64_t nt, const int64_t dynamic_density, const int32* left,
     const int32* right, const int32* terms,
     const std::vector<unsigned char>& is_parent,
     const double* ar, const double* ai, const double* weights,
     const double* seed, const double* hr, const double* hi, const double* hw,
     double* o0, double* o1, double* ow, double* os,
     const bool zero_weight_direction, OpKernelContext* context) {
+  if constexpr (fixed_density == 0) {
+    if (dynamic_density == 2) {
+      // Keep both embedding channels and their accumulation order unchanged,
+      // while exposing this common loop extent to the compiler on AVX2 too.
+      CompactDensity<mode, 2>(nf, na, np, nt, dynamic_density, left, right,
+          terms, is_parent, ar, ai, weights, seed, hr, hi, hw, o0, o1, ow, os,
+          zero_weight_direction, context);
+      return;
+    }
+  }
   constexpr int block = WBC_DENSITY_BLOCK;
+  const int64_t nd = fixed_density ? fixed_density : dynamic_density;
   const int64_t nn = nf + np, nw = nt * nd;
   const bool reverse = mode >= 1 && (o0 || o1);
   const int64_t nblocks = (na + block - 1) / block;
