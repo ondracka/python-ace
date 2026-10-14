@@ -145,7 +145,7 @@ void CompactDensity(
             if (reverse) {
               for (int64_t k = np; k-- > 0;) {
                 const int64_t node = slots[nf + k];
-                std::array<double, block> terminal_gr{}, terminal_gi{}, terminal_dgr{}, terminal_dgi{};
+                std::array<double, block> terminal_gr{}, terminal_dgr{};
                 const double *qr, *qi, *qdr = nullptr, *qdi = nullptr;
                 if (node >= 0) {
                   qr = gr.data() + node * block; qi = gi.data() + node * block;
@@ -163,8 +163,35 @@ void CompactDensity(
                         terminal_dgr[lane] += hw[t * nd + d] * s[d * block + lane];
                     }
                   }
-                  qr = terminal_gr.data(); qi = terminal_gi.data();
-                  qdr = terminal_dgr.data(); qdi = terminal_dgi.data();
+                  // Terminal densities are real, so their imaginary reverse
+                  // seeds are structurally zero. Avoid generic complex
+                  // arithmetic here, including the identically zero tangent
+                  // seed when no coefficient direction is requested.
+                  #pragma GCC ivdep
+                  for (int lane = 0; lane < block; ++lane) {
+                    const int64_t l = lhs[k] + lane, r = rhs[k] + lane;
+                    const double q = terminal_gr[lane];
+                    if constexpr (mode == 2) {
+                      if constexpr (zero_hw) {
+                        dgr[l] += q * dr[r];
+                        dgi[l] -= q * di[r];
+                        dgr[r] += q * dr[l];
+                        dgi[r] -= q * di[l];
+                      } else {
+                        const double dq = terminal_dgr[lane];
+                        dgr[l] += dq * pr[r] + q * dr[r];
+                        dgi[l] += -dq * pi[r] - q * di[r];
+                        dgr[r] += dq * pr[l] + q * dr[l];
+                        dgi[r] += -dq * pi[l] - q * di[l];
+                      }
+                    }
+                    // Sequential updates also handle repeated factors l == r.
+                    gr[l] += q * pr[r];
+                    gi[l] -= q * pi[r];
+                    gr[r] += q * pr[l];
+                    gi[r] -= q * pi[l];
+                  }
+                  continue;
                 }
                 #pragma GCC ivdep
                 for (int lane = 0; lane < block; ++lane) {

@@ -122,6 +122,18 @@ as physical validation of a fitted model:
 python tests/cpu/smoke.py --directory /tmp/pacemaker-cpu-smoke
 ```
 
+The compact density kernel also has a synthetic derivative check. It covers
+one, two and three embedding channels, empty and partial atom blocks,
+repeated product factors, intermediate terms, graph output pruning and
+structurally zero coefficient directions. It compares values, first
+derivatives and mixed second derivatives with TensorFlow arithmetic and the
+uncompressed native kernel:
+
+```bash
+python tests/cpu/density.py
+python tests/cpu/density.py --threads 3
+```
+
 The CPU source patches were extracted from the original development history
 without its private datasets, fitted models or project notes. Later compact,
 packed and worker improvements are a separate follow-up commit. Upstream
