@@ -140,6 +140,56 @@ packed and worker improvements are a separate follow-up commit. Upstream
 license terms remain in [LICENSE.md](LICENSE.md), and the SciPy notice is
 retained in `src/pyace_cpu/fast_bfgs.py`.
 
+## Source-specific energy offsets
+
+The `multifit-cpu` branch ports the energy-offset fitter from `multifit`
+(`c67a1b8`) onto the CPU branch (`01cfa88`). Enable it with the same input:
+
+```yaml
+fit:
+  optimizer: BFGS
+  source_energy_offsets: {column: source_id, reference: 1}
+```
+
+Every training row must have a source label. The reference label must be
+present and its offset is fixed to zero. At each coefficient vector, the
+other offsets minimize the weighted squared per-atom energy residuals over
+the entire training dataset. The structure energy weights are used directly;
+atom count converts total energies to per-atom residuals. Changing source
+offsets does not change forces or regularization.
+
+Both ordinary `pacemaker` and `pacemaker-cpu` support this input, using the
+unmodified pinned TensorPotential dependency. The integration is shipped in
+PyACE rather than requiring the old local TensorPotential edits. Offset fits
+support BFGS, L-BFGS-B and CG. The existing parallel restriction to graph mode
+without a test split still applies; ordinary TensorPotential fitting can use
+test data, applying only the offsets learned from training. Test-only source
+labels are rejected.
+
+The parallel fitter first predicts energies in its persistent workers,
+reduces them in dataset order, and fits one global offset per source. It
+then sends the updated energy targets to those same workers for the ordinary
+loss and gradient evaluation. This adds a prediction pass to each objective
+evaluation. Offsets are never fitted independently per worker or batch.
+The usual analytic gradient is exact for this minimized scalar objective,
+because the derivative with respect to every fitted offset is zero.
+
+Predictions for labelled data include the fitted source correction, with
+`energy_pred_raw`, `energy_source_offset_fit`, and
+`energy_source_offset_fit_per_atom` retained in the prediction pickle.
+The offsets are also recorded in fitting metrics and the log. The saved ACE
+potential contains the shared model coefficients; source offsets are training
+provenance, not extra force terms in an ASE or LAMMPS calculation.
+
+The synthetic checks cover unequal atom counts and weights, large positive
+and negative shifts, finite-difference gradients, accepted-iteration offset
+restoration, held-out labels, and serial/parallel agreement:
+
+```bash
+python -m pytest -q tests/test_source_energy_offsets.py --runtensorpot
+python tests/cpu/smoke.py --directory /tmp/pacemaker-cpu-offset-smoke --source-offsets
+```
+
 The fresh Rosat installation was checked on an AMD Ryzen 9 3900X. Both ISA
 variants compiled, and automatic selection chose AVX2. The two-step,
 two-worker smoke fit matched ordinary Pacemaker to approximately 1e-16 in
