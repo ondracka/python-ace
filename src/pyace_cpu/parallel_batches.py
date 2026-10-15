@@ -61,8 +61,16 @@ def _worker(connection, cpus, model, loss_specs, potential_options, batches,
             request = connection.recv()
             if request is None:
                 break
+            if isinstance(request, dict):
+                # Offset fitting needs one globally reduced prediction pass.
+                potential.set_coefs(request['coefficients'])
+                values = [(index, np.asarray(tensorpot.evaluate(batch)[0]).reshape(-1))
+                          for index, batch in batches]
+                connection.send(('energies', values))
+                continue
             coefficients, batch_limit = request[:2]
-            diagnostic = request[2] if len(request) == 3 else None
+            diagnostic = request[2] if len(request) >= 3 else None
+            targets = request[3] if len(request) == 4 else None
             selected = batches[:batch_limit] if batch_limit else batches
             results = []
             batch_times = []
@@ -77,6 +85,8 @@ def _worker(connection, cpus, model, loss_specs, potential_options, batches,
                 # Reset for every request, including line-search evaluations.
                 potential.set_coefs(coefficients)
             for completed, (index, batch) in enumerate(selected, 1):
+                if targets is not None:
+                    batch['energy'] = tf.convert_to_tensor(targets[index], tf.float64)
                 batch_start = time.perf_counter() if diagnostic else None
                 result = (tensorpot.native_fit(batch) if set_coefs_once else
                           tensorpot.external_fit(coefficients, batch))
@@ -234,6 +244,8 @@ class PersistentBatchPool:
         import tensorflow as tf
         start = time.perf_counter()
         try:
+            offset_manager = getattr(fitter, 'energy_offset_manager', None)
+            update_targets = offset_manager is not None and offset_manager.enabled
             for worker, connection in enumerate(self.connections):
                 request = (coefficients, None)
                 if diagnostic is not None:
@@ -242,6 +254,9 @@ class PersistentBatchPool:
                         from pathlib import Path
                         options['profile_dir'] = str(Path(diagnostic['directory']) / f'worker-{worker:02d}')
                     request += (options,)
+                if update_targets:
+                    targets = {index: batches[index]['energy'] for index in self.assignment[worker]}
+                    request = (coefficients, None, request[2] if len(request) == 3 else None, targets)
                 connection.send(request)
             sent = time.perf_counter()
             results = [None] * len(batches)
@@ -298,6 +313,23 @@ class PersistentBatchPool:
                 slowest_worker_s=max(times), total_s=time.perf_counter() - start,
                 diagnostic=diagnostic is not None))
             return result
+        except BaseException:
+            self.close(abort=True)
+            raise
+
+    def predict_energies(self, coefficients, batches):
+        """Predict in workers and restore dataset order before fitting offsets."""
+        if self.closed or [id(batch) for batch in batches] != self.batch_ids:
+            raise ValueError('The pool is closed or its immutable batch list changed')
+        import numpy as np
+        try:
+            for connection in self.connections:
+                connection.send({'coefficients': coefficients})
+            energies = [None] * len(batches)
+            for _, connection in self._result_connections():
+                for index, values in self._receive(connection, 'energies')[1]:
+                    energies[index] = values
+            return np.concatenate(energies)
         except BaseException:
             self.close(abort=True)
             raise

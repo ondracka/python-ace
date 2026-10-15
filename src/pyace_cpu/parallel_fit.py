@@ -39,11 +39,8 @@ def enable(workers, cores):
     original_objective = FitTensorPotential.fit_func
     signature = inspect.signature(original_fit)
 
-    @wraps(original_objective)
-    def objective(self, coefficients, batches):
-        context = getattr(self, '_wbc_parallel_context', None)
-        if context is None:
-            return original_objective(self, coefficients, batches)
+    def get_pool(self, batches):
+        context = self._wbc_parallel_context
         if context['pool'] is None:
             model = Path(context['directory']) / 'worker-model.yaml'
             self.tensorpot.potential.get_updated_config().save(str(model))
@@ -51,7 +48,14 @@ def enable(workers, cores):
                                                   cores, cpu_ids=cpus)
             print(f'CPU batch pool: {workers} workers on physical CPUs {cpus}, '
                   f'{len(batches)} globally weighted batches.', flush=True)
-        return context['pool'].fit_func(self, coefficients, batches,
+        return context['pool']
+
+    @wraps(original_objective)
+    def objective(self, coefficients, batches):
+        context = getattr(self, '_wbc_parallel_context', None)
+        if context is None:
+            return original_objective(self, coefficients, batches)
+        return get_pool(self, batches).fit_func(self, coefficients, batches,
             aggregate=lambda x, b: original_objective(self, x, b))
 
     @wraps(original_fit)
@@ -67,6 +71,7 @@ def enable(workers, cores):
         with tempfile.TemporaryDirectory(prefix='wbc-cpu-fit-') as directory:
             context = dict(directory=directory, pool=None)
             self._wbc_parallel_context = context
+            self._cpu_predict_energies = lambda x, b: get_pool(self, b).predict_energies(x, b)
             try:
                 return original_fit(self, *args, **kwargs)
             finally:
@@ -76,6 +81,7 @@ def enable(workers, cores):
                         worker_times=pool.worker_times, assignment=pool.assignment)
                     pool.close()
                 del self._wbc_parallel_context
+                del self._cpu_predict_energies
 
     fit._wbc_parallel = True
     FitTensorPotential.fit = fit
