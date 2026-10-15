@@ -13,6 +13,7 @@ from pyace.basis import BBasisConfiguration, ACEBBasisSet
 
 from pyace.multispecies_basisextension import compute_bbasisset_train_mask, expand_trainable_parameters
 from pyace.lossfuncspec import LossFunctionSpecification
+from pyace.utils.source_energy_offsets import SourceEnergyOffsetManager
 
 
 class BackendConfig:
@@ -54,6 +55,7 @@ class FitBackendAdapter:
         self.metrics = None
         self.fit_metrics_callback = fit_metrics_callback
         self.test_metrics_callback = test_metrics_callback
+        self.energy_offset_manager = None
 
     @property
     def evaluator_name(self):
@@ -87,6 +89,16 @@ class FitBackendAdapter:
         # save globally
         self.trainable_parameters_dict = trainable_parameters_dict
         self.bbasisconfig = bbasisconfig
+        self.energy_offset_manager = SourceEnergyOffsetManager.from_fit_config(fit_config)
+        self.energy_offset_manager.validate_dataframe(dataframe, dataset_name="fitting dataframe")
+        if test_dataframe is not None:
+            self.energy_offset_manager.validate_dataframe(test_dataframe, dataset_name="test dataframe")
+        if self.energy_offset_manager.enabled:
+            log.info(
+                "Source-specific per-atom energy offsets are enabled using column `%s` (reference=%s)",
+                self.energy_offset_manager.column,
+                self.energy_offset_manager.reference_value,
+            )
 
         if self.backend_config.evaluator_name == TENSORPOT_EVAL:
             from tensorflow.python.framework.errors_impl import ResourceExhaustedError, InternalError
@@ -209,7 +221,15 @@ class FitBackendAdapter:
             tensorpotential = TensorPotential(ace_potential, loss_specs=loss_specs)
 
             display_step = self.backend_config.get('display_step', 20)
-            self.fitter = FitTensorPotential(tensorpotential, display_step=display_step)
+            if self.energy_offset_manager.enabled:
+                from pyace.utils.tensorpotential_offsets import SourceOffsetTensorPotential
+                self.fitter = SourceOffsetTensorPotential(
+                    tensorpotential, display_step=display_step,
+                    energy_offset_manager=self.energy_offset_manager,
+                )
+            else:
+                self.fitter = FitTensorPotential(tensorpotential, display_step=display_step)
+            self.fitter.energy_offset_manager = self.energy_offset_manager
             # assign total_number_of_functions to fitter
             total_number_of_functions = bbasisconfig.total_number_of_functions
             self.fitter.nfuncs = total_number_of_functions
@@ -265,7 +285,9 @@ class FitBackendAdapter:
                                                       n_workers=self.backend_config.get(BACKEND_NWORKERS_KW, None)
                                                       ),
                                seed=42,
-                               display_step=display_step, trainable_parameters=trainable_parameters_dict)
+                               display_step=display_step,
+                               trainable_parameters=trainable_parameters_dict,
+                               energy_offset_manager=self.energy_offset_manager)
 
         # maxiter = fit_config.get(FIT_NITER_KW, 100)
         #
@@ -318,14 +340,17 @@ class FitBackendAdapter:
     def predict(self, structures_dataframe=None, bbasisconfig=None):
         if self.fitter is None:
             self.setup_backend_for_predict(bbasisconfig)
-        return self.fitter.predict(structures_dataframe)
+        if structures_dataframe is None:
+            structures_dataframe = self.fitter.get_fitting_data()
+        prediction = self.fitter.predict(structures_dataframe)
+        return self._apply_source_offsets_to_prediction(prediction, structures_dataframe)
 
     def compute_metrics(self, energy_col='energy_corrected',
                         nat_column='NUMBER_OF_ATOMS', force_col='forces'):
         results = {}
-        prediction = self.predict()
-        l1, l2, smth1, smth2, smth3 = self.fitter.get_reg_components()
         datadf = self.fitter.get_fitting_data()
+        prediction = self.predict(datadf)
+        l1, l2, smth1, smth2, smth3 = self.fitter.get_reg_components()
 
         datadf[force_col] = datadf[force_col].apply(np.array)
         datadf['w_forces'] = datadf['w_forces'].apply(np.reshape, newshape=[-1, 1])
@@ -368,6 +393,81 @@ class FitBackendAdapter:
         if self.callback is not None:
             self.callback(current_bbasisconfig)
 
+    def get_last_source_energy_offsets(self):
+        if self.fitter is None:
+            return {}
+        return getattr(self.fitter, "last_source_energy_offsets", {}) or {}
+
+    @staticmethod
+    def _format_source_energy_offsets(offsets):
+        if not offsets:
+            return None
+
+        def sort_key(item):
+            key = item[0]
+            try:
+                return 0, float(key)
+            except (TypeError, ValueError):
+                return 1, str(key)
+
+        return ", ".join(
+            f"{label}={float(value):.12g} eV/atom"
+            for label, value in sorted(offsets.items(), key=sort_key)
+        )
+
+    def log_source_energy_offsets(self, fit_metric_data=None, prefix=None):
+        offsets = None
+        if fit_metric_data is not None:
+            offsets = fit_metric_data.get(FIT_SOURCE_ENERGY_OFFSETS_KW)
+        if not offsets:
+            offsets = self.get_last_source_energy_offsets()
+        formatted_offsets = self._format_source_energy_offsets(offsets)
+        if formatted_offsets is None:
+            return
+
+        if prefix is None:
+            prefix = "Fitted source-specific per-atom energy offsets"
+        log.info("%s: %s", prefix, formatted_offsets)
+
+    def _apply_source_offsets_to_prediction(self, prediction, structures_dataframe):
+        if structures_dataframe is None:
+            return prediction
+        if self.energy_offset_manager is None or not self.energy_offset_manager.has_labels(structures_dataframe):
+            return prediction
+
+        offsets = self.get_last_source_energy_offsets()
+        if not offsets:
+            return prediction
+
+        total_offsets = self.energy_offset_manager.get_total_offsets(structures_dataframe, offsets=offsets)
+        per_atom_offsets = self.energy_offset_manager.get_offsets_per_atom(structures_dataframe, offsets=offsets)
+
+        if isinstance(prediction, pd.DataFrame):
+            if ENERGY_PRED_COL in prediction.columns:
+                adjusted_prediction = prediction.copy()
+                raw_energy_pred = adjusted_prediction[ENERGY_PRED_COL].to_numpy(dtype=float)
+                adjusted_prediction["energy_pred_raw"] = raw_energy_pred
+                adjusted_prediction["energy_source_offset_fit"] = total_offsets
+                adjusted_prediction["energy_source_offset_fit_per_atom"] = per_atom_offsets
+                adjusted_prediction[ENERGY_PRED_COL] = raw_energy_pred + total_offsets
+                return adjusted_prediction
+            return prediction
+
+        if isinstance(prediction, dict) and ENERGY_PRED_COL in prediction:
+            adjusted_prediction = dict(prediction)
+            raw_energy_pred = np.asarray(adjusted_prediction[ENERGY_PRED_COL], dtype=float).reshape(-1)
+            adjusted_prediction["energy_pred_raw"] = raw_energy_pred
+            adjusted_prediction["energy_source_offset_fit"] = total_offsets
+            adjusted_prediction["energy_source_offset_fit_per_atom"] = per_atom_offsets
+            adjusted_prediction[ENERGY_PRED_COL] = raw_energy_pred + total_offsets
+            if "de" in adjusted_prediction:
+                adjusted_prediction["de"] = np.asarray(prediction["de"]) - total_offsets
+            if "de_pa" in adjusted_prediction:
+                adjusted_prediction["de_pa"] = np.asarray(prediction["de_pa"]) - per_atom_offsets
+            return adjusted_prediction
+
+        return prediction
+
     @property
     def last_loss(self):
         if self.backend_config.evaluator_name == TENSORPOT_EVAL:
@@ -387,6 +487,9 @@ class FitBackendAdapter:
     def last_fit_metric_data(self, value):
         if self.fitter is not None:
             self.fitter.last_fit_metric_data = value
+            offsets = (value or {}).get(FIT_SOURCE_ENERGY_OFFSETS_KW)
+            if offsets and self.energy_offset_manager is not None:
+                self.fitter.last_source_energy_offsets = self.energy_offset_manager.restore_offsets(offsets)
 
     @property
     def last_test_metric_data(self):

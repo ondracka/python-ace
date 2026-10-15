@@ -381,9 +381,11 @@ def predict_and_save(general_fit, target_bbasisconfig, structures_dataframe, fna
                                     bbasisconfig=target_bbasisconfig)
     if not isinstance(pred_data, pd.DataFrame):
         from pyace.const import ENERGY_PRED_COL, FORCES_PRED_COL
-        pred_data = pd.DataFrame({ENERGY_PRED_COL: pred_data[ENERGY_PRED_COL],
-                                  FORCES_PRED_COL: pred_data[FORCES_PRED_COL]
-                                  }, index=structures_dataframe.index)
+        columns = [ENERGY_PRED_COL, FORCES_PRED_COL]
+        columns += [name for name in ('energy_pred_raw', 'energy_source_offset_fit',
+                                      'energy_source_offset_fit_per_atom') if name in pred_data]
+        pred_data = pd.DataFrame({name: pred_data[name] for name in columns},
+                                index=structures_dataframe.index)
     columns_to_drop = ["ase_atoms", "atomic_env", "tp_atoms"]
 
     if general_fit.evaluator_name == "pyace" and "atomic_env" in structures_dataframe.columns:
