@@ -1,6 +1,7 @@
 # Opt-in Pacemaker CPU fitting
 
-This branch adds `pacemaker-cpu`. Plain `pacemaker` keeps its upstream behavior.
+This branch adds `pacemaker-cpu`. CPU acceleration is opt-in; source-energy
+offsets are a separate opt-in feature available through either command.
 The accelerated command uses the same ACE representation, float64 arithmetic,
 fitting labels, global weights, regularization and analytic parameter gradients.
 It retains full BFGS, replacing its cubic matrix update with an equivalent
@@ -12,7 +13,7 @@ retains the original global summation order.
 On Linux x86-64, with Conda already available:
 
 ```bash
-git clone --branch pacemaker-cpu --single-branch https://github.com/ondracka/python-ace.git
+git clone --branch pacemaker-cpu-energy-offsets --single-branch https://github.com/ondracka/python-ace.git
 cd python-ace
 bash conda/create-cpu-environment.sh "$HOME/.conda/envs/pacemaker-cpu"
 conda activate "$HOME/.conda/envs/pacemaker-cpu"
@@ -148,8 +149,11 @@ retained in `src/pyace_cpu/fast_bfgs.py`.
 
 ## Source-specific energy offsets
 
-The `multifit-cpu` branch ports the energy-offset fitter from `multifit`
-(`c67a1b8`) onto the CPU branch (`01cfa88`). Enable it with the same input:
+The `pacemaker-cpu-energy-offsets` branch combines CPU acceleration with the
+source-offset fitter. The full [energy-offset guide](ENERGY-OFFSETS.md)
+covers label preparation, units and sign, a complete input example, thread
+settings, prediction columns, restarting and scientific limitations.
+The essential additional setting is:
 
 ```yaml
 fit:
@@ -192,7 +196,8 @@ preparation, not only the final loss/gradient worker pass.
 Predictions for labelled data include the fitted source correction, with
 `energy_pred_raw`, `energy_source_offset_fit`, and
 `energy_source_offset_fit_per_atom` retained in the prediction pickle.
-The offsets are also recorded in fitting metrics and the log. The saved ACE
+The offsets are also retained in metric snapshots and the log; the ordinary
+`metrics.txt` table does not contain the offset vector. The saved ACE
 potential contains the shared model coefficients; source offsets are training
 provenance, not extra force terms in an ASE or LAMMPS calculation.
 

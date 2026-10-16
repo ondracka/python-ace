@@ -5,8 +5,13 @@ It is based on the `pyace` (this repo) and `tensorpotential`([another repo](http
 
 This branch also provides opt-in `pacemaker-cpu` acceleration, automatic
 AVX2/AVX-512 selection, and a standalone Conda environment installer.
-See [CPU fitting and installation](CPU-FITTING.md). Plain `pacemaker`
-retains its upstream behavior.
+See [CPU fitting and installation](CPU-FITTING.md).
+
+It also supports fitting datasets with different absolute energy zeros using
+one fitted per-atom offset per source/method group. This is opt-in and works
+with both `pacemaker` and `pacemaker-cpu`.
+See [source-energy-offset fitting](ENERGY-OFFSETS.md) for dataset labels,
+input settings, a 12-worker launch command, outputs and restart caveats.
 
 # Installation
 

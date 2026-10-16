@@ -241,6 +241,19 @@ or alternatively, one could use  `pacemaker ... -p potential.yaml -ip initial_po
 
 ## Fitting settings
 
+This branch optionally supports a fitted per-atom energy zero for each
+labelled source/method group:
+
+```yaml
+fit:
+  source_energy_offsets: {column: source_id, reference: method_A}
+```
+
+Every training row must have the named column, and the reference label must
+occur in training. This is distinct from `data.reference_energy` above.
+See the [energy-offset fitting guide](../../ENERGY-OFFSETS.md) for a complete
+example, units, sign convention, outputs and backend/restart limitations.
+
 Example of `fit` section is:
 
 ```YAML
