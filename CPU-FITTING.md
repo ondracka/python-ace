@@ -71,6 +71,12 @@ not rewrite the input. Worker count must not exceed the number of batches.
 The current parallel adapter supports BFGS, L-BFGS-B and CG in graph mode,
 without a train/test split. It rejects unsupported modes explicitly.
 
+At startup, both the console and the selected log file (`log.txt` by default,
+or `--log PATH`) record the selected CPU ISA, density-kernel workspace and
+packing variant, atom block size, native operations, worker/thread counts,
+full-BFGS optimization and native-kernel cache. Plain `pacemaker` does not
+emit this CPU-only banner.
+
 Thread counts default to allowed physical cores, capped by
 `SLURM_CPUS_PER_TASK` when present, with one worker per core. Set them
 explicitly for reproducible benchmarks. `WBC_CPU_THREADS` and

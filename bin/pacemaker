@@ -55,7 +55,7 @@ files_to_remove = ["fitting_data_info.csv", "fitting_data_info.pckl.gzip",
 DEFAULT_SEED = 42
 
 
-def main(args):
+def main(args, *, startup_log=()):
     parser = argparse.ArgumentParser(prog="pacemaker", description="Fitting utility for atomic cluster expansion "
                                                                    "potentials.\n" +
                                                                    "version: {}".format(__version__))
@@ -155,6 +155,8 @@ def main(args):
         log.addHandler(fileh)
 
     log.info("Start pacemaker")
+    for message in startup_log:
+        log.info(message)
     log.info("Hostname: {}".format(hostname))
     log.info("Username: {}".format(username))
     log.info("pacemaker/pyace version: {}".format(__version__))

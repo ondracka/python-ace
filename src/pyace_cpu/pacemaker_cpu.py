@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import runpy
 import sys
-from .runtime import configure, information
+from .runtime import configure, information, startup_messages
 
 def main():
     isa = configure()
@@ -56,27 +56,12 @@ def main():
     pacemaker = Path(sys.executable).with_name('pacemaker')
     if not pacemaker.is_file():
         raise FileNotFoundError(f'No Pacemaker in this environment: {pacemaker}')
-    print(f'CPU ISA: {isa}. CPU rewrites enabled: native SBessel and trigonometric recurrences with per-batch derivative '
-          'reuse, shared identical radial primitives, atom-blocked float64 ACE '
-          'densities with cross-rank product sharing and unused density work pruned, '
-          'all-bond primitive moments and rank-one sums without bond-type '
-          'geometry partitions, with unused derivative outputs pruned '
-          'and separate real/imaginary angular functions with exact '
-          'first/second derivatives, and rank-two full BFGS. '
-          f'Batch workers: {workers}. Model, loss and trainable parameters '
-          'are unchanged.', flush=True)
-    if compact == '1':
-        print('Compact density derivative workspaces enabled, terminal products '
-              'are consumed without full-node scratch arrays.', flush=True)
-    if packed == '1':
-        print('AVX-512 packed-complex densities enabled, four atoms per block '
-              'with unchanged float64 arithmetic.', flush=True)
     sys.argv[0] = str(pacemaker)
     # Keep this guarded, lightweight launcher as multiprocessing's main module.
     # Loading the CLI as __main__ would make spawned workers import its heavy
     # dependencies before their thread limits are configured.
     program = runpy.run_path(str(pacemaker), run_name='_wbc_pacemaker_cli')
-    program['main'](sys.argv[1:])
+    program['main'](sys.argv[1:], startup_log=startup_messages(isa, workers, cores))
 
 
 if __name__ == '__main__':

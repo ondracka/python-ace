@@ -103,6 +103,13 @@ def main():
                                     stderr=subprocess.STDOUT, timeout=300)
         if result.returncode:
             raise RuntimeError(f'{command} failed, see {directory / "console.log"}')
+        startup_log = (directory/'log.txt').read_text()
+        if command == 'pacemaker-cpu':
+            assert f'CPU ISA: {select_isa()}' in startup_log
+            assert 'CPU density kernel:' in startup_log
+            assert 'CPU parallelism: workers=2, physical cores=2' in startup_log
+        else:
+            assert 'CPU ISA:' not in startup_log
         metrics.append(pd.read_csv(directory/'metrics.txt', sep=r'\s+'))
         coefficients.append(np.asarray(BBasisConfiguration(
             str(directory/'output_potential.yaml')).get_all_coeffs()))

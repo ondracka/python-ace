@@ -94,3 +94,25 @@ def information():
                 threads=os.environ.get('WBC_CPU_THREADS'),
                 workers=os.environ.get('WBC_CPU_WORKERS'),
                 cache=str(cache_root()), versions=versions)
+
+
+def startup_messages(isa, workers, cores):
+    """Describe the enabled CPU path after the CLI opens its chosen log file."""
+    compact = os.environ.get('WBC_CPU_COMPACT_DENSITY', '0') == '1'
+    packed = os.environ.get('WBC_CPU_DENSITY_PACKED', '0') == '1'
+    workspace = 'compact' if compact else 'full-node workspace'
+    layout = 'packed-complex' if packed else 'separate real/imaginary'
+    block = os.environ.get('WBC_CPU_DENSITY_BLOCK', '4')
+    threads = cores // workers if workers > 1 else os.environ['TF_NUM_INTRAOP_THREADS']
+    features = 'AVX2/FMA' + (' + AVX-512F/DQ/VL' if isa == 'avx512' else '')
+    return (
+        f'CPU ISA: {isa} ({features})',
+        f'CPU density kernel: {workspace}, {layout}, atom block={block}, float64.',
+        'CPU native kernels: SBessel/radial with derivative reuse, split angular '
+        'functions, all-bond moments and shared ACE products with unused outputs pruned.',
+        f'CPU parallelism: workers={workers}, physical cores={cores}, '
+        f'TensorFlow threads per worker={threads}; parent BLAS threads: '
+        f'OpenBLAS={os.environ["OPENBLAS_NUM_THREADS"]}, MKL={os.environ["MKL_NUM_THREADS"]}.',
+        'CPU optimizer: exact rank-two full BFGS update enabled (used with BFGS).',
+        f'CPU native kernel cache: {cache_root()}',
+    )
