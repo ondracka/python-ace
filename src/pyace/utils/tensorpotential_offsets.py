@@ -11,12 +11,15 @@ import time
 import numpy as np
 from tensorpotential.fit import FitTensorPotential
 
+from pyace.utils.tensorpotential_energy import make_energy_only_evaluator
+
 
 class SourceOffsetTensorPotential(FitTensorPotential):
     def __init__(self, *args, energy_offset_manager, **kwargs):
         super().__init__(*args, **kwargs)
         self.energy_offset_manager = energy_offset_manager
         self.last_source_energy_offsets = {}
+        self._evaluate_energy_only = make_energy_only_evaluator(self.tensorpot)
 
     @staticmethod
     def _current_targets(dataframe):
@@ -52,8 +55,8 @@ class SourceOffsetTensorPotential(FitTensorPotential):
         if parallel is not None:
             return parallel(coefficients, batches)
         self.tensorpot.potential.set_coefs(coefficients)
-        evaluate = self.tensorpot.eager_evaluate if self.eager else self.tensorpot.evaluate
-        return np.concatenate([evaluate(batch)[0].numpy().reshape(-1) for batch in batches])
+        return np.concatenate([self._evaluate_energy_only(batch, eager=self.eager).numpy().reshape(-1)
+                               for batch in batches])
 
     def fit_func(self, coefficients, batches):
         started = time.perf_counter()

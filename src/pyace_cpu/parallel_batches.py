@@ -57,14 +57,18 @@ def _worker(connection, cpus, model, loss_specs, potential_options, batches,
                     for key in keys:
                         batch[key] = tf.convert_to_tensor(batch[key], dtype=dtype, name=key)
         connection.send(('ready', os.getpid()))
+        energy_only = None
         while True:
             request = connection.recv()
             if request is None:
                 break
             if isinstance(request, dict):
                 # Offset fitting needs one globally reduced prediction pass.
+                if energy_only is None:
+                    from pyace.utils.tensorpotential_energy import make_energy_only_evaluator
+                    energy_only = make_energy_only_evaluator(tensorpot)
                 potential.set_coefs(request['coefficients'])
-                values = [(index, np.asarray(tensorpot.evaluate(batch)[0]).reshape(-1))
+                values = [(index, np.asarray(energy_only(batch)).reshape(-1))
                           for index, batch in batches]
                 connection.send(('energies', values))
                 continue

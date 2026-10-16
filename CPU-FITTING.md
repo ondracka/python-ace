@@ -180,6 +180,12 @@ evaluation. Offsets are never fitted independently per worker or batch.
 The usual analytic gradient is exact for this minimized scalar objective,
 because the derivative with respect to every fitted offset is zero.
 
+The preliminary prediction uses the upstream energy forward pass only; it
+does not compute the forces and stress returned by the usual prediction
+interface. This applies to ordinary and persistent-worker offset fitting,
+including live coefficient updates, without changing the fitted objective
+or the frozen TensorPotential dependency.
+
 Predictions for labelled data include the fitted source correction, with
 `energy_pred_raw`, `energy_source_offset_fit`, and
 `energy_source_offset_fit_per_atom` retained in the prediction pickle.
@@ -192,7 +198,7 @@ and negative shifts, finite-difference gradients, accepted-iteration offset
 restoration, held-out labels, and serial/parallel agreement:
 
 ```bash
-python -m pytest -q tests/test_source_energy_offsets.py --runtensorpot
+python -m pytest -q tests/test_source_energy_offsets.py tests/test_tensorpotential_energy.py --runtensorpot
 python tests/cpu/smoke.py --directory /tmp/pacemaker-cpu-offset-smoke --source-offsets
 ```
 
