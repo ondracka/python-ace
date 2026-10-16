@@ -186,6 +186,9 @@ interface. This applies to ordinary and persistent-worker offset fitting,
 including live coefficient updates, without changing the fitted objective
 or the frozen TensorPotential dependency.
 
+Offset-fitting evaluation times include both passes and source-target
+preparation, not only the final loss/gradient worker pass.
+
 Predictions for labelled data include the fitted source correction, with
 `energy_pred_raw`, `energy_source_offset_fit`, and
 `energy_source_offset_fit_per_atom` retained in the prediction pickle.

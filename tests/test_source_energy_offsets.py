@@ -2,6 +2,7 @@
 
 import copy
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -153,3 +154,40 @@ def test_test_metrics_use_training_offsets(tmp_path, monkeypatch):
                                 / test['NUMBER_OF_ATOMS'].to_numpy())**2))
     assert result['rmse_epa'] == pytest.approx(expected)
     assert fitter.last_source_energy_offsets == before
+
+
+@pytest.mark.tensorpot
+def test_profiled_timing_includes_prediction_and_target_preparation(monkeypatch):
+    from pyace.utils import tensorpotential_offsets as module
+    from tensorpotential.fit import FitTensorPotential
+
+    fitter = object.__new__(module.SourceOffsetTensorPotential)
+    fitter.data_df = pd.DataFrame(dict(
+        source=[0, 1], NUMBER_OF_ATOMS=[2, 4], energy_corrected=[2., 40.]))
+    fitter.energy_offset_manager = SourceEnergyOffsetManager(column='source', reference_value=0, enabled=True)
+    fitter._evaluate_batch_energies = lambda coefficients, batches: np.zeros(2)
+    fitter.metrics = SimpleNamespace(eval_time=0.)
+    fitter.metrics.to_FitMetricsDict = lambda: dict(eval_time=fitter.metrics.eval_time)
+    fitter.fit_metrics_data_dict = {}
+    fitter.last_fit_metric_data = None
+    ticks = iter((100., 100.3, 100.5))
+    monkeypatch.setattr(module, 'time', SimpleNamespace(perf_counter=lambda: next(ticks)))
+
+    def worker_aggregation(self, coefficients, batches):
+        snapshot = self.metrics.to_FitMetricsDict()
+        assert snapshot['eval_time'] == pytest.approx(.3)
+        # Reproduce the pool's final overwrite with gradient-pass-only timing.
+        snapshot['eval_time'] = .01
+        self.eval_time = self.metrics.eval_time = .01
+        self.last_fit_metric_data = snapshot
+        self.fit_metrics_data_dict[hash(coefficients.tobytes())] = snapshot
+        return 1., np.ones_like(coefficients)
+
+    monkeypatch.setattr(FitTensorPotential, 'fit_func', worker_aggregation)
+    coefficients = np.array([.1, .2])
+    energies = np.array([[2.], [40.]])
+    fitter.fit_func(coefficients, [dict(energy=energies)])
+    assert fitter.eval_time == pytest.approx(.5)
+    assert fitter.metrics.eval_time == pytest.approx(.5)
+    assert fitter.last_fit_metric_data['eval_time'] == pytest.approx(.5)
+    assert fitter.fit_metrics_data_dict[hash(coefficients.tobytes())]['eval_time'] == pytest.approx(.5)

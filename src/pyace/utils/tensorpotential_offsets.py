@@ -91,7 +91,15 @@ class SourceOffsetTensorPotential(FitTensorPotential):
             # The CPU pool sends the new energy targets on every evaluation.
             self.data_df = adjusted
             self.metrics.to_FitMetricsDict = snapshot
-            return super().fit_func(coefficients, batches)
+            result = super().fit_func(coefficients, batches)
+            # The worker aggregator records its own pass duration after the
+            # snapshot callback. Restore the complete profiled-objective time,
+            # including energy prediction and source-target preparation.
+            self.eval_time = time.perf_counter() - started
+            self.metrics.eval_time = self.eval_time
+            if self.last_fit_metric_data is not None:
+                self.last_fit_metric_data['eval_time'] = self.eval_time
+            return result
         finally:
             self.data_df = dataframe
             self.metrics.to_FitMetricsDict = original_snapshot
